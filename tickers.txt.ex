@@ -1,0 +1,12 @@
+# 股票代码列表（每行一个）
+# 以 # 开头的行为注释，会被忽略
+# 支持美股代码，如 AAPL, MSFT, GOOGL 等
+
+AAPL
+MSFT
+GOOGL
+AMZN
+TSLA
+NVDA
+META
+NFLX

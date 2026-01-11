@@ -6,12 +6,13 @@
 from .base.factor import BaseFactor, TechnicalFactor, FundamentalFactor, AlternativeFactor, factor_registry
 
 # 导入所有因子类型，触发自动注册
-from .technical import momentum
+from . import technical
 
 __all__ = [
     "BaseFactor",
     "TechnicalFactor", 
     "FundamentalFactor",
     "AlternativeFactor",
-    "factor_registry"
-] 
+    "factor_registry",
+    "technical",
+]

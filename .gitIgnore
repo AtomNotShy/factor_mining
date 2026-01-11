@@ -1,0 +1,14 @@
+.idea/*
+.vscode/*
+.env
+logs/*
+*.pyc
+venv/*
+*.log
+
+__pycache__/*
+
+frontend/node_modules/*
+
+claude/*
+data/*

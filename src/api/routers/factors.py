@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
 import pandas as pd
 
 from src.factors.base.factor import factor_registry
-from src.factors.technical.momentum import *  # 自动注册因子
+import src.factors  # noqa: F401 触发因子自动注册（technical/momentum/volatility/reversal 等）
 from src.data.collectors.exchange import MultiExchangeCollector
 from src.utils.logger import get_logger
 

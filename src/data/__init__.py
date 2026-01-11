@@ -4,9 +4,11 @@
 """
 
 from .collectors.exchange import MultiExchangeCollector, BinanceCollector, OKXCollector
+from .collectors.polygon import PolygonCollector
 
 __all__ = [
     "MultiExchangeCollector",
     "BinanceCollector", 
-    "OKXCollector"
-] 
+    "OKXCollector",
+    "PolygonCollector",
+]

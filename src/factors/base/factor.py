@@ -115,11 +115,11 @@ class BaseFactor(ABC):
     
     def _handle_missing_values(self, data: pd.DataFrame) -> pd.DataFrame:
         """处理缺失值"""
-        # 前向填充
-        data = data.fillna(method='ffill')
+        # 前向填充（使用新API避免弃用警告）
+        data = data.ffill()
         
         # 如果仍有缺失值，使用后向填充
-        data = data.fillna(method='bfill')
+        data = data.bfill()
         
         return data
     

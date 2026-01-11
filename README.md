@@ -47,7 +47,7 @@ factor/
 
 ```bash
 # 创建虚拟环境
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate  # Linux/Mac
 # 或 venv\Scripts\activate  # Windows
 
@@ -55,14 +55,22 @@ source venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 ```
 
+可选（机器学习相关）：
+
+```bash
+pip install -r requirements-ml.txt
+```
+
+macOS/arm64 若安装 `lightgbm` 失败，建议优先用 Docker 运行；或改用 conda-forge 安装 `lightgbm`。
+
 #### 2. 启动服务
 
 ```bash
 # 直接启动（使用默认配置）
-python run.py
+python3 run.py
 
 # 或者使用uvicorn启动
-python -m uvicorn src.api.main:app --reload --port 8000
+python3 -m uvicorn src.api.main:app --reload --port 8000
 ```
 
 #### 3. 访问系统
@@ -101,6 +109,7 @@ docker run -p 8000:8000 factor-mining
 
 ### 📊 数据采集
 - ✅ 多交易所数据采集 (Binance, OKX)
+- ✅ 美股/ETF 数据采集 (Polygon，支持本地Parquet缓存)
 - ✅ 实时市场数据获取
 - ✅ 历史数据回填
 - ✅ 数据质量检查
@@ -132,10 +141,16 @@ docker run -p 8000:8000 factor-mining
 
 ```bash
 # 运行基础功能测试
-python examples/simple_test.py
+python3 examples/simple_test.py
 
 # 运行API客户端测试（需要先启动服务）
-python examples/api_client_demo.py
+python3 examples/api_client_demo.py
+
+# 运行SPY 1分钟 VWAP 回踩策略示例回测（需要配置 POLYGON_API_KEY）
+python3 examples/vwap_pullback_spy_backtest.py
+
+# 分析 SPY 近4个月因子 IC 表现（需要配置 POLYGON_API_KEY）
+python3 examples/spy_factor_ic_4m.py
 ```
 
 ### 2. API使用示例
@@ -171,6 +186,18 @@ curl -X POST "http://localhost:8000/api/v1/data/ohlcv" \
      -H "Content-Type: application/json" \
      -d '{"symbol": "BTC/USDT", "timeframe": "1h", "limit": 50}'
 ```
+
+### 4. 获取美股/ETF数据（Polygon，本地缓存）
+
+先设置环境变量 `POLYGON_API_KEY`，然后：
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/data/polygon/ohlcv" \
+     -H "Content-Type: application/json" \
+     -d '{"symbol": "AAPL", "timeframe": "1m", "limit": 500}'
+```
+
+数据会缓存到 `data/polygon/ohlcv/`（Docker Compose 已挂载 `./data:/app/data`，可持久化）。
 
 ## 项目结构说明
 

@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "factor_mining"
+version = "0.1.0"
+description = "ETF回测平台 - 基于Interactive Brokers的美股ETF策略回测系统"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Factor Mining", email = "dev@example.com"}
+]
+dependencies = [
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "pydantic>=2.0.0",
+    "ib-insync>=0.9.0",
+    "pyarrow>=12.0.0",
+    "python-dotenv>=1.0.0",
+    "loguru>=0.7.0",
+    "typer>=0.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+exclude = ["tests*", "examples*", "frontend*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.basedpyright]
+# 忽略 pandas 类型存根的已知问题（不影响运行时）
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+reportUnannotatedClassAttribute = false
+reportUnusedParameter = false
+reportUnusedVariable = false
+reportDeprecated = false
+# 忽略 pandas ExtensionArray 相关的类型问题
+reportAttributeAccessIssue = false
+# 忽略 Timestamp NaT 操作相关的问题
+reportOperatorIssue = false
