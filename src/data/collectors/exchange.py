@@ -3,13 +3,17 @@
 支持主流交易所的数据采集
 """
 
-import ccxt
+import ccxt.async_support as ccxt
 import asyncio
 import pandas as pd
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union, Any
 from datetime import datetime, timedelta
 from .base import BaseDataCollector, Logger
 from src.config.settings import get_settings
+
+
+# CCXT 交易所类型的类型注解
+_ExchangeType = Any  # ccxt.async_support.binance/okx 实例类型
 
 
 class ExchangeCollector(BaseDataCollector):
@@ -18,7 +22,7 @@ class ExchangeCollector(BaseDataCollector):
     def __init__(self, exchange_name: str):
         super().__init__(f"exchange_{exchange_name}")
         self.exchange_name = exchange_name
-        self.exchange = None
+        self.exchange: _ExchangeType = None  # type: ignore
         self.settings = get_settings().exchange
         self._setup_exchange()
     
@@ -237,7 +241,7 @@ class OKXCollector(ExchangeCollector):
 class MultiExchangeCollector:
     """多交易所数据采集器"""
     
-    def __init__(self, exchanges: List[str] = None):
+    def __init__(self, exchanges: List[str] = []):
         if exchanges is None:
             exchanges = ["binance"]
         

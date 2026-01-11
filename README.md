@@ -146,9 +146,6 @@ python3 examples/simple_test.py
 # 运行API客户端测试（需要先启动服务）
 python3 examples/api_client_demo.py
 
-# 运行SPY 1分钟 VWAP 回踩策略示例回测（需要配置 POLYGON_API_KEY）
-python3 examples/vwap_pullback_spy_backtest.py
-
 # 分析 SPY 近4个月因子 IC 表现（需要配置 POLYGON_API_KEY）
 python3 examples/spy_factor_ic_4m.py
 ```

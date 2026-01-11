@@ -43,7 +43,6 @@ from datetime import date
 from src.core.context import RunContext, Environment
 from src.core.calendar import TradingCalendar
 from src.evaluation.backtesting.engine_v2 import BacktestEngine
-from src.strategies.vwap.vwap_pullback_v2 import VWAPPullbackStrategyV2, VWAPPullbackParams
 
 # 创建运行上下文
 calendar = TradingCalendar()

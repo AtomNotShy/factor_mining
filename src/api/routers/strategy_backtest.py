@@ -266,6 +266,7 @@ async def _run_backtest_with_progress(
     benchmark_symbol: Optional[str] = None,
     task_id: Optional[str] = None,
     auto_download: bool = True,
+    etf_pool: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """执行回测（带进度更新）"""
     from src.core.task_manager import task_manager
@@ -281,6 +282,23 @@ async def _run_backtest_with_progress(
     strategy = strategy_registry.get_strategy(strategy_name)
     if not strategy:
         raise ValueError(f"策略不存在: {strategy_name}")
+    
+    # 如果传入了 etf_pool，使用传入的值
+    if etf_pool:
+        strategy.set_params({"etf_pool": etf_pool})
+        logger.info(f"使用传入的 etf_pool: {etf_pool}")
+    # 对于 us_etf_momentum 策略，如果没有传入 etf_pool 且 universe 是默认值（未明确指定），
+    # 则使用策略的默认 etf_pool
+    elif strategy_name == "us_etf_momentum":
+        # 检查 universe 是否是默认值（未在请求中明确指定）
+        # 如果 universe 只有一个元素且为默认值 "SPY"，且 etf_pool 未传入，则使用策略默认
+        default_etf_pool = strategy.config.params.get("etf_pool", [])
+        if default_etf_pool and isinstance(default_etf_pool, list) and len(default_etf_pool) > 0:
+            # 使用策略默认的 etf_pool 作为 universe
+            strategy.set_params({"etf_pool": default_etf_pool})
+            # 同时更新 universe 为 etf_pool，确保回测引擎加载正确的数据
+            universe = default_etf_pool
+            logger.info(f"使用策略默认 etf_pool: {default_etf_pool}")
     
     # 计算日期
     from datetime import timedelta as _timedelta
@@ -844,6 +862,7 @@ async def run_backtest(request: BacktestRequest):
         days=request.days,
         benchmark_symbol=request.benchmark_symbol,
         auto_download=True, # 默认开启自动下载
+        etf_pool=request.etf_pool,
     )
     
     # 保存到历史记录

@@ -14,7 +14,7 @@
 """
 
 import math
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
@@ -29,33 +29,31 @@ from src.utils.logger import get_logger
 class USETFMomentumStrategy(Strategy):
     """美股 ETF 动量轮动策略"""
     
+    # 默认美股ETF池
+    DEFAULT_ETF_POOL = [
+        "QQQ",   # 纳斯达克100
+        "XLK",   # 科技精选
+        "SOXX",  # 半导体
+        "SPY",   # 标普500
+        "DIA",   # 道琼斯
+        "IWM",   # 罗素2000
+        "GLD",   # 黄金
+        "SLV",   # 白银
+        "USO",   # 原油
+        "TLT",   # 20年期国债
+        "IEF",   # 7-10年期国债
+        "EEM",   # 新兴市场
+        "FXI",   # 中国大盘
+    ]
+    
     def __init__(self, config: Optional[StrategyConfig] = None):
         if config is None:
             config = StrategyConfig(
                 strategy_id="us_etf_momentum",
                 timeframe="1d",
                 params={
-                    # ETF 池配置
-                    "etf_pool": [
-                        # 科技板块
-                        "QQQ",   # 纳斯达克100
-                        "XLK",   # 科技精选
-                        "SOXX",  # 半导体
-                        # 大盘指数
-                        "SPY",   # 标普500
-                        "DIA",   # 道琼斯
-                        "IWM",   # 罗素2000
-                        # 商品
-                        "GLD",   # 黄金
-                        "SLV",   # 白银
-                        "USO",   # 原油
-                        # 债券
-                        "TLT",   # 20年期国债
-                        "IEF",   # 7-10年期国债
-                        # 新兴市场
-                        "EEM",   # 新兴市场
-                        "FXI",   # 中国大盘
-                    ],
+                    # ETF 池配置（默认使用类属性，可在外部覆盖）
+                    "etf_pool": self.DEFAULT_ETF_POOL.copy(),
                     # 动量参数
                     "min_lookback_days": 20,
                     "max_lookback_days": 60,
@@ -82,6 +80,16 @@ class USETFMomentumStrategy(Strategy):
 
         if int(self.config.params.get("exit_rank", 0) or 0) <= 0:
             self.config.params["exit_rank"] = int(self.config.params.get("target_positions", 1))
+
+    def set_params(self, params: Dict[str, Any]):
+        """设置策略参数，支持外部传入 etf_pool"""
+        # 如果传入了 etf_pool，确保它是列表格式
+        if "etf_pool" in params:
+            etf_pool = params["etf_pool"]
+            if isinstance(etf_pool, str):
+                # 如果是字符串（逗号分隔），解析为列表
+                params["etf_pool"] = [s.strip().upper() for s in etf_pool.split(",") if s.strip()]
+        super().set_params(params)
 
     def _is_rebalance_day(self, ctx: RunContext) -> bool:
         frequency = str(self.config.params.get("rebalance_frequency", "weekly")).lower()

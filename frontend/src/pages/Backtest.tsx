@@ -21,7 +21,7 @@ export default function Backtest() {
   const [error, setError] = useState<string | null>(null)
 
   const [formData, setFormData] = useState({
-    strategy_name: 'vwap_pullback',
+    strategy_name: 'us_etf_momentum',
     symbol: 'SPY',
     timeframe: '1d',
     days: 365,
@@ -44,8 +44,16 @@ export default function Backtest() {
       const response = await api.get('/strategy-backtest/strategies')
       const loaded = response.data.strategies || []
       setStrategies(loaded)
+      
+      // 如果当前策略不在列表中，自动选择第一个可用策略
       const current = loaded.find((strategy: Strategy) => strategy.name === formData.strategy_name)
-      if (current?.params?.benchmark_symbol && !formData.benchmark_symbol) {
+      if (!current && loaded.length > 0) {
+        setFormData((prev) => ({
+          ...prev,
+          strategy_name: loaded[0].name,
+          benchmark_symbol: String(loaded[0].params?.benchmark_symbol || '').toUpperCase(),
+        }))
+      } else if (current?.params?.benchmark_symbol && !formData.benchmark_symbol) {
         setFormData((prev) => ({
           ...prev,
           benchmark_symbol: String(current.params.benchmark_symbol).toUpperCase(),
@@ -62,7 +70,42 @@ export default function Backtest() {
     setResults(null)
 
     try {
-      const response = await api.post('/strategy-backtest/run', formData)
+      // 构建回测请求数据
+      const submitData: any = {
+        strategy_name: formData.strategy_name,
+        symbol: formData.symbol,
+        timeframe: formData.timeframe,
+        initial_capital: formData.initial_capital,
+        commission_rate: formData.commission_rate,
+        slippage_rate: formData.slippage_rate,
+      }
+      
+      // 处理日期
+      if (dateMode === 'days') {
+        submitData.days = formData.days
+      } else {
+        submitData.start_date = formData.start_date
+        submitData.end_date = formData.end_date
+      }
+      
+      // 处理 benchmark
+      if (formData.benchmark_symbol) {
+        submitData.benchmark_symbol = formData.benchmark_symbol
+      }
+      
+      // us_etf_momentum 策略：如果 symbol 为空，使用策略默认的 etf_pool
+      if (formData.strategy_name === 'us_etf_momentum' && (!formData.symbol || !formData.symbol.trim())) {
+        const selectedStrategy = strategies.find(s => s.name === formData.strategy_name)
+        const defaultEtfPool = selectedStrategy?.params?.etf_pool
+        if (defaultEtfPool && Array.isArray(defaultEtfPool) && defaultEtfPool.length > 0) {
+          submitData.etf_pool = defaultEtfPool
+          // 对于 etf_pool，不需要 symbol 参数
+          delete submitData.symbol
+          console.log(`使用策略默认 etf_pool: ${defaultEtfPool.join(', ')}`)
+        }
+      }
+      
+      const response = await api.post('/strategy-backtest/run', submitData)
       setResults(response.data)
     } catch (err: any) {
       const data = err.response?.data
