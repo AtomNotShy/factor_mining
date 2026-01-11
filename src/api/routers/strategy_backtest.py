@@ -283,18 +283,14 @@ async def _run_backtest_with_progress(
     if not strategy:
         raise ValueError(f"策略不存在: {strategy_name}")
     
-    # 如果传入了 etf_pool，使用传入的值
-    if etf_pool:
+    # 如果传入了非空的 etf_pool，使用传入的值
+    if etf_pool and len(etf_pool) > 0:
         strategy.set_params({"etf_pool": etf_pool})
         logger.info(f"使用传入的 etf_pool: {etf_pool}")
-    # 对于 us_etf_momentum 策略，如果没有传入 etf_pool 且 universe 是默认值（未明确指定），
-    # 则使用策略的默认 etf_pool
-    elif strategy_name == "us_etf_momentum":
-        # 检查 universe 是否是默认值（未在请求中明确指定）
-        # 如果 universe 只有一个元素且为默认值 "SPY"，且 etf_pool 未传入，则使用策略默认
+    else:
+        # etf_pool 为空或未传入，使用策略的默认 etf_pool
         default_etf_pool = strategy.config.params.get("etf_pool", [])
         if default_etf_pool and isinstance(default_etf_pool, list) and len(default_etf_pool) > 0:
-            # 使用策略默认的 etf_pool 作为 universe
             strategy.set_params({"etf_pool": default_etf_pool})
             # 同时更新 universe 为 etf_pool，确保回测引擎加载正确的数据
             universe = default_etf_pool
@@ -394,8 +390,8 @@ async def _run_backtest_with_progress(
     if isinstance(total_return, pd.Series):
         total_return = float(total_return.iloc[-1]) if len(total_return) > 0 else 0.0
     
-    days = (end_dt - effective_start_dt).days
-    annualized_return = (1 + total_return) ** (365.0 / max(days, 1)) - 1 if days > 0 else 0.0
+    days_count = (end_dt - effective_start_dt).days
+    annualized_return = (1 + total_return) ** (365.0 / max(days_count, 1)) - 1 if days_count > 0 else 0.0
     
     if not portfolio_df.empty:
         if 'date' in portfolio_df.columns:
@@ -555,8 +551,10 @@ async def _run_backtest_with_progress(
     
     # 找到最大回撤区间
     max_dd_value = float(drawdown.min()) if len(drawdown) > 0 else 0
-    max_dd_idx = int(drawdown.values.argmin()) if len(drawdown) > 0 else 0
-    peak_idx = int(drawdown[:max_dd_idx+1].values.argmax()) if max_dd_idx > 0 else 0
+    drawdown_array = np.asarray(drawdown.values, dtype=float)
+    max_dd_idx = int(np.argmin(drawdown_array)) if len(drawdown) > 0 else 0
+    peak_array = np.asarray(drawdown[:max_dd_idx+1].values, dtype=float)
+    peak_idx = int(np.argmax(peak_array)) if max_dd_idx > 0 else 0
     
     # 获取日期列表（YYYYMMDD格式）- 优先使用date列，否则使用索引
     def format_date_yyyymmdd(d):
@@ -658,9 +656,8 @@ async def _run_backtest_with_progress(
             )
 
         if benchmark_df is not None and not benchmark_df.empty:
-            if "close" not in benchmark_df.columns:
-                rename_map = {"c": "close"}
-                benchmark_df = benchmark_df.rename(columns=rename_map)
+            if "close" not in benchmark_df.columns and "c" in benchmark_df.columns:
+                benchmark_df["close"] = benchmark_df["c"]
             if "close" in benchmark_df.columns:
                 benchmark_returns = benchmark_analyzer.calculate_returns_from_prices(
                     benchmark_df["close"]
@@ -866,7 +863,7 @@ async def run_backtest(request: BacktestRequest):
     )
     
     # 保存到历史记录
-    _on_backtest_complete(None, result)
+    _on_backtest_complete("", result)
     
     return result
 

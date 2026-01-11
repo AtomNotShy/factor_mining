@@ -8,13 +8,6 @@ interface BacktestFormProps {
   loading: boolean
 }
 
-// 默认美股ETF池
-const DEFAULT_ETF_POOL = [
-  "SPY", "QQQ", "IWM", "VTI", "VOO",
-  "VEA", "VWO", "EFA", "EEM",
-  "TLT", "IEF", "AGG", "LQD", "HYG",
-  "XLF", "XLE", "XLI", "XLK", "XLV", "XLP"
-]
 
 export default function BacktestForm({ strategies, onSubmit, loading }: BacktestFormProps) {
   const { t } = useTranslation()
@@ -30,7 +23,7 @@ export default function BacktestForm({ strategies, onSubmit, loading }: Backtest
     initial_capital: 100000,
     commission_rate: 0.001,
     slippage_rate: 0.0005,
-    etf_pool: DEFAULT_ETF_POOL.join(','),  // ETF池（逗号分隔的字符串）
+    etf_pool: '',  // ETF池（由后端根据策略默认配置）
   })
   const [dateError, setDateError] = useState<string | null>(null)
   const [availableSymbols, setAvailableSymbols] = useState<string[]>([])
@@ -235,9 +228,12 @@ export default function BacktestForm({ strategies, onSubmit, loading }: Backtest
       slippage_rate: formData.slippage_rate,
     }
 
-    // ETF策略：传递ETF池
+    // ETF策略：传递ETF池（如果为空则不传，由后端使用策略默认配置）
     if (formData.strategy_name === 'etf_momentum_rotation' || formData.strategy_name === 'etf_momentum_rotation_fixed') {
-      submitData.etf_pool = parseEtfPool(formData.etf_pool)
+      const etfPool = parseEtfPool(formData.etf_pool)
+      if (etfPool.length >= 2) {
+        submitData.etf_pool = etfPool
+      }
       // ETF策略不需要单标的
       delete submitData.symbol
     }
@@ -316,7 +312,7 @@ export default function BacktestForm({ strategies, onSubmit, loading }: Backtest
         {(selectedStrategy?.name === 'etf_momentum_rotation' || selectedStrategy?.name === 'etf_momentum_rotation_fixed') && (
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              ETF Pool (comma-separated)
+              ETF Pool (comma-separated, leave empty to use strategy default)
             </label>
             <textarea
               value={formData.etf_pool}
@@ -326,7 +322,7 @@ export default function BacktestForm({ strategies, onSubmit, loading }: Backtest
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-sm"
             />
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              Enter ETF symbols separated by commas (e.g., SPY, QQQ, IWM, VTI, VOO)
+              Leave empty to use the strategy's default ETF pool, or enter symbols separated by commas
             </p>
           </div>
         )}

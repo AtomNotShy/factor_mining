@@ -1,10 +1,12 @@
 .idea/*
+.idea/
 .vscode/*
 .env
 logs/*
 *.pyc
 venv/*
 *.log
+.DS_Store
 
 __pycache__/*
 
