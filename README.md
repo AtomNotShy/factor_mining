@@ -1,49 +1,36 @@
 # Factor Mining System
 
-一个系统化的因子挖掘系统，为freqtrade量化交易策略提供数据驱动的决策支持。
+一个因子挖掘与回测系统，支持Python FastAPI后端 + React/TypeScript前端。为ETF/股票策略开发提供数据驱动的决策支持，可支持多数据来源：IB, Polygon.io, Biance。
 
 ## 项目结构
 
 ```
-factor/
-├── src/
-│   ├── data/                   # 数据管理模块
-│   │   ├── collectors/         # 数据采集器
-│   │   ├── processors/         # 数据处理器
-│   │   └── storage/           # 数据存储
-│   ├── factors/               # 因子计算模块
-│   │   ├── base/              # 基础因子类
-│   │   ├── technical/         # 技术因子
-│   │   ├── fundamental/       # 基本面因子
-│   │   └── alternative/       # 另类因子
-│   ├── evaluation/            # 因子评估模块
-│   │   ├── metrics/           # 评估指标
-│   │   ├── backtesting/       # 回测引擎
-│   │   └── analysis/          # 分析工具
-│   ├── strategy/              # 策略生成模块
-│   │   ├── generators/        # 策略生成器
-│   │   └── freqtrade/         # freqtrade集成
-│   ├── api/                   # API接口
-│   │   ├── routers/           # 路由模块
-│   │   └── schemas/           # 数据模型
-│   ├── monitoring/            # 监控模块
-│   │   ├── alerts/            # 预警系统
-│   │   └── reports/           # 报告生成
-│   ├── config/                # 配置管理
-│   └── utils/                 # 工具函数
-├── frontend/                  # 前端界面
-├── tests/                     # 测试代码
-├── docs/                      # 文档
-├── scripts/                   # 脚本工具
-├── docker/                    # Docker配置
-└── requirements.txt           # Python依赖
+factor_mining/
+├── src/                    # Python后端 (FastAPI)
+│   ├── api/               # 路由模块 (7个模块)
+│   ├── config/            # Pydantic配置 (嵌套env_prefix)
+│   ├── core/              # 核心域类型 (Signal, Order, PortfolioState)
+│   ├── data/              # 数据采集器 (IB, Polygon, CCXT) + 存储
+│   ├── evaluation/        # 双引擎回测 + 评估指标
+│   ├── execution/         # 券商实现
+│   ├── factors/           # 40+ 技术因子
+│   ├── strategies/        # 策略实现 (v2)
+│   └── utils/             # Loguru日志
+├── frontend/              # React/TypeScript + Vite
+│   └── src/
+│       ├── components/    # 图表 (Recharts + TradingView), 组件
+│       ├── pages/         # 页面 (Dashboard, Backtest, History, Monitoring, Settings)
+│       ├── services/      # Axios API服务
+│       └── stores/        # Zustand状态管理
+├── examples/              # 13个示例脚本
+├── tests/                 # 测试目录
+├── data/                  # 本地Parquet缓存, IB OHLCV数据
+└── docs/                  # 详细文档
 ```
 
 ## 快速开始
 
-### 方式一：直接运行
-
-#### 1. 环境准备
+### 环境准备
 
 ```bash
 # 创建虚拟环境
@@ -55,30 +42,19 @@ source venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 ```
 
-可选（机器学习相关）：
+### 启动服务
+
+**方式一：直接运行**
 
 ```bash
-pip install -r requirements-ml.txt
-```
-
-macOS/arm64 若安装 `lightgbm` 失败，建议优先用 Docker 运行；或改用 conda-forge 安装 `lightgbm`。
-
-#### 2. 启动服务
-
-```bash
-# 直接启动（使用默认配置）
+# 使用run.py启动
 python3 run.py
 
-# 或者使用uvicorn启动
+# 或使用uvicorn启动
 python3 -m uvicorn src.api.main:app --reload --port 8000
 ```
 
-#### 3. 访问系统
-
-- API文档: http://localhost:8000/docs
-- 系统健康检查: http://localhost:8000/health
-
-### 方式二：Docker Compose（推荐）
+**方式二：Docker Compose（推荐）**
 
 ```bash
 # 启动完整系统（包括数据库、缓存等）
@@ -91,66 +67,94 @@ docker-compose logs -f factor-mining
 docker-compose down
 ```
 
-启动后可访问：
-- 因子挖掘API: http://localhost:8000/docs
-- Grafana监控: http://localhost:3000 (admin/admin)
+### 访问系统
 
-### 方式三：单独Docker
-
-```bash
-# 构建镜像
-docker build -t factor-mining .
-
-# 运行容器
-docker run -p 8000:8000 factor-mining
-```
+- API文档: http://localhost:8000/docs
+- Web界面: http://localhost:3000
+- 健康检查: http://localhost:8000/health
 
 ## 功能特性
 
 ### 📊 数据采集
-- ✅ 多交易所数据采集 (Binance, OKX)
-- ✅ 美股/ETF 数据采集 (Polygon，支持本地Parquet缓存)
+- ✅ 多数据源支持 (Interactive Brokers, Polygon.io, CCXT)
+- ✅ 加密货币数据 (Binance, OKX等)
+- ✅ 美股/ETF数据 (Polygon，本地Parquet缓存)
 - ✅ 实时市场数据获取
 - ✅ 历史数据回填
 - ✅ 数据质量检查
 
 ### 🧮 因子计算
 - ✅ 40+ 技术因子库
-  - 动量类因子 (10+): 价格动量、RSI动量、MACD动量等
-  - 波动率因子 (10+): 历史波动率、ATR、GARCH波动率等
-  - 反转类因子 (10+): 短期反转、RSI反转、布林带反转等
+  - 动量因子: 价格动量、RSI动量、MACD动量等
+  - 波动率因子: 历史波动率、ATR、GARCH波动率等
+  - 反转因子: 短期反转、RSI反转、布林带反转等
 - ✅ 自定义因子开发框架
-- ✅ 因子批量计算API
+- ✅ 因子注册表系统
 
 ### 📈 因子评估
 - ✅ IC分析 (信息系数)
-- ✅ 因子回测引擎
+- ✅ 回测引擎 (v2)
 - ✅ 分层回测分析
 - ✅ 多空组合构建
 - ✅ 性能指标计算
 - ✅ 因子排名系统
+- ✅ 步进向前分析
 
-### 🎯 策略生成
-- ✅ freqtrade策略生成
+### 🎯 策略系统
+- ✅ ETF动量策略
+- ✅ 简单移动平均策略
+- ✅ 简单动量策略
+- ✅ 策略自动注册
+- ✅ 策略回测CLI工具
+- ✅ 批量因子测试
+
+### 📡 执行与监控
+- ✅ Interactive Brokers TWS集成
+- ✅ 模拟交易模式
 - ✅ 实时监控预警
-- ✅ 可视化分析界面
+- ✅ 任务管理
+
+### 🌐 前端界面
+- ✅ 仪表盘
+- ✅ 回测页面
+- ✅ 历史记录
+- ✅ 监控面板
+- ✅ 设置页面
+- ✅ TradingView图表集成
+- ✅ 回撤图、权益曲线、月度收益热力图
 
 ## 使用示例
 
-### 1. 本地测试
+### 1. 运行示例脚本
 
 ```bash
-# 运行基础功能测试
+# 简单测试
 python3 examples/simple_test.py
 
-# 运行API客户端测试（需要先启动服务）
+# API客户端测试（需要先启动服务）
 python3 examples/api_client_demo.py
 
-# 分析 SPY 近4个月因子 IC 表现（需要配置 POLYGON_API_KEY）
+# 分析SPY因子IC表现
 python3 examples/spy_factor_ic_4m.py
+
+# 下载日线数据
+python3 examples/download_daily_data.py
 ```
 
-### 2. API使用示例
+### 2. 使用回测CLI
+
+```bash
+# 运行回测
+python3 backtest_cli.py --strategy etf_momentum_us --symbol SPY --start 2023-01-01
+
+# 批量测试
+python3 batch_factor_test.py
+
+# 优化分析
+python3 batch_sharpe_optimization.py
+```
+
+### 3. API使用示例
 
 ```python
 import aiohttp
@@ -164,47 +168,30 @@ async def get_factor_data():
             print(f"可用因子: {factors['count']} 个")
         
         # 计算动量因子
-        params = {"symbol": "BTC/USDT", "timeframe": "1h", "limit": 100}
+        params = {"symbol": "SPY", "timeframe": "1d", "limit": 100}
         async with session.post(
             "http://localhost:8000/api/v1/factors/calculate/momentum_20",
-            params=params
+            json=params
         ) as resp:
             result = await resp.json()
-            print(f"动量因子计算结果: {result['statistics']}")
+            print(f"动量因子计算结果")
 
 asyncio.run(get_factor_data())
 ```
 
-### 3. 获取市场数据
+### 4. 获取市场数据
 
 ```bash
-# 使用curl获取BTC/USDT数据
+# 获取美股数据
+curl -X POST "http://localhost:8000/api/v1/data/polygon/ohlcv" \
+     -H "Content-Type: application/json" \
+     -d '{"symbol": "AAPL", "timeframe": "1m", "limit": 500}'
+
+# 获取加密货币数据
 curl -X POST "http://localhost:8000/api/v1/data/ohlcv" \
      -H "Content-Type: application/json" \
      -d '{"symbol": "BTC/USDT", "timeframe": "1h", "limit": 50}'
 ```
-
-### 4. 获取美股/ETF数据（Polygon，本地缓存）
-
-先设置环境变量 `POLYGON_API_KEY`，然后：
-
-```bash
-curl -X POST "http://localhost:8000/api/v1/data/polygon/ohlcv" \
-     -H "Content-Type: application/json" \
-     -d '{"symbol": "AAPL", "timeframe": "1m", "limit": 500}'
-```
-
-数据会缓存到 `data/polygon/ohlcv/`（Docker Compose 已挂载 `./data:/app/data`，可持久化）。
-
-## 项目结构说明
-
-- `src/data/` - 数据采集和处理模块
-- `src/factors/` - 因子计算模块，包含各种因子算法
-- `src/api/` - RESTful API接口
-- `src/config/` - 配置管理
-- `src/utils/` - 工具函数
-- `examples/` - 使用示例和测试脚本
-- `docker/` - Docker相关配置
 
 ## 开发指南
 
@@ -239,27 +226,78 @@ class MyCustomFactor(TechnicalFactor):
 factor_registry.register(MyCustomFactor())
 ```
 
+### 添加新策略
+
+1. 在 `src/strategies/` 或 `src/strategies/example/` 中创建策略文件
+2. 继承 `Strategy` 基类
+3. 实现 `generate_signals` 方法
+4. 在 `src/strategies/__init__.py` 中导入以自动注册
+
+```python
+from src.strategies.base.strategy import Strategy, Signal, SignalAction
+
+class MyStrategy(Strategy):
+    name = "my_strategy"
+    description = "我的策略"
+    
+    def generate_signals(self, data, portfolio_state=None):
+        # 实现信号生成逻辑
+        return Signal(
+            ts_utc=data.index[-1],
+            symbol=self.symbol,
+            action=SignalAction.BUY,
+            strength=1.0
+        )
+```
+
 ### 配置环境变量
 
-系统支持通过环境变量进行配置：
+系统支持通过环境变量进行配置，参考 `.env.example`：
 
 ```bash
-# 数据库配置
-export DB_HOST=
-export DB_PORT=
-export DB_USERNAME=
-export DB_PASSWORD=
+# Interactive Brokers配置
+export IB_HOST=127.0.0.1
+export IB_PORT=7497
+export IB_CLIENT_ID=1
 
-# 交易所API配置
-export EXCHANGE_BINANCE_API_KEY=
-export EXCHANGE_BINANCE_SECRET=
+# Polygon API配置
+export POLYGON_API_KEY=your_api_key
+
+# 数据库配置
+export DB_HOST=localhost
+export DB_PORT=5432
 
 # API服务配置
 export API_HOST=0.0.0.0
 export API_PORT=8000
-export API_DEBUG=false
 ```
+
+## 项目结构说明
+
+| 目录 | 说明 |
+|------|------|
+| `src/api/` | FastAPI RESTful接口 |
+| `src/data/` | 数据采集和处理模块 |
+| `src/factors/` | 因子计算模块 |
+| `src/evaluation/` | 回测和评估模块 |
+| `src/strategies/` | 策略实现模块 |
+| `src/execution/` | 券商集成模块 |
+| `src/core/` | 核心类型定义 |
+| `src/monitoring/` | 监控和预警模块 |
+| `frontend/` | React前端应用 |
+| `examples/` | 使用示例脚本 |
+| `docs/` | 详细文档 |
+
+## 相关文档
+
+- [开发指南](AGENTS.md) - 详细的开发规范和代码地图
+- [策略回测CLI使用指南](docs/策略回测CLI使用指南.md)
+- [策略回测Web界面使用指南](docs/策略回测Web界面使用指南.md)
+- [策略系统使用指南](docs/策略系统使用指南.md)
+- [批量因子测试使用指南](docs/批量因子测试使用指南.md)
+- [前端开发指南](frontend/AGENTS.md)
+- [前端快速开始](frontend/QUICK_START.md)
 
 ## 许可证
 
-MIT License # factor_mining
+MIT License
