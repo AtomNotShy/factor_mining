@@ -4,7 +4,7 @@
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 import pandas as pd
 from enum import Enum
@@ -63,11 +63,12 @@ class Signal:
 @dataclass
 class OrderIntent:
     """订单意图（策略层输出）"""
-    ts_utc: datetime
-    symbol: str
-    side: OrderSide  # BUY/SELL
-    qty: float
-    order_type: OrderType  # MKT/LMT/STP
+    order_id: str = ""
+    ts_utc: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    symbol: str = ""
+    side: OrderSide = OrderSide.BUY
+    qty: float = 0.0
+    order_type: OrderType = OrderType.MKT
     limit_price: Optional[float] = None
     stop_price: Optional[float] = None
     strategy_id: str = ""
@@ -94,6 +95,7 @@ class Fill:
 class MarketData:
     """市场数据容器"""
     bars: pd.DataFrame  # indexed by ts_utc, columns: open/high/low/close/volume...
+    bars_map: Optional[Dict[str, pd.DataFrame]] = None  # 多周期数据映射: timeframe -> DataFrame
     bars_all: Optional[pd.DataFrame] = None  # 完整历史数据（包含预热期）
     features: Optional[pd.DataFrame] = None  # aligned (ts_utc, symbol)
     actions: Optional[pd.DataFrame] = None  # corporate actions if needed
@@ -105,15 +107,21 @@ class MarketData:
         if not isinstance(self.bars.index, pd.DatetimeIndex):
             raise ValueError("bars 必须使用 DatetimeIndex")
 
+    def get_bars(self, timeframe: str) -> pd.DataFrame:
+        """获取指定时间框架的数据"""
+        if self.bars_map and timeframe in self.bars_map:
+            return self.bars_map[timeframe]
+        return self.bars
+
 
 @dataclass
 class PortfolioState:
     """组合状态"""
-    cash: float
-    positions: Dict[str, float]  # symbol -> qty
-    avg_price: Dict[str, float]  # symbol -> 平均成本价
-    equity: float  # 总资产净值
-    daily_loss: float  # 当日亏损
+    cash: float = 0.0
+    positions: Dict[str, float] = field(default_factory=dict)
+    avg_price: Dict[str, float] = field(default_factory=dict)
+    equity: float = 0.0
+    daily_loss: float = 0.0
     metadata: Dict[str, Any] = field(default_factory=dict)
     
     def get_position(self, symbol: str) -> float:

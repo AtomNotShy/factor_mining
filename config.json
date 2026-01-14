@@ -1,0 +1,34 @@
+{
+    "trading": {
+        "stake_amount": 100000.0,
+        "max_open_trades": 5,
+        "timeframe": "1d",
+        "dry_run": true
+    },
+    "broker": {
+        "name": "simulated",
+        "commission": 0.001,
+        "slippage": 0.0005
+    },
+    "risk": {
+        "stoploss": -0.1,
+        "trailing_stop": true
+    },
+    "data": {
+        "datadir": "./data",
+        "startup_candle_count": 200,
+        "universe": [
+            "QQQ",
+            "XLK",
+            "SPY"
+        ],
+        "benchmark_symbol": "SPY"
+    },
+    "strategy": {
+        "name": "us_etf_momentum",
+        "params": {
+            "target_positions": 1,
+            "min_score": 0.0
+        }
+    }
+}

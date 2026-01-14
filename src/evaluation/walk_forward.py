@@ -15,7 +15,8 @@ import pandas as pd
 
 from src.core.context import RunContext, Environment
 from src.core.calendar import TradingCalendar
-from src.evaluation.backtesting.engine import BacktestEngine
+from src.evaluation.backtesting.unified_engine import UnifiedBacktestEngine, UnifiedConfig, FeatureFlag
+from src.evaluation.backtesting.config import TradeConfig, TimeConfig
 from src.strategies.base.strategy import Strategy
 from src.utils.logger import get_logger
 
@@ -23,8 +24,13 @@ from src.utils.logger import get_logger
 class WalkForwardAnalyzer:
     """Walk-Forward分析器"""
     
-    def __init__(self, engine: Optional[BacktestEngine] = None):
-        self.engine = engine or BacktestEngine()
+    def __init__(self, engine: Optional[UnifiedBacktestEngine] = None):
+        config = UnifiedConfig(
+            trade=TradeConfig(),
+            time=TimeConfig(),
+            features=FeatureFlag.ALL,
+        )
+        self.engine = engine or UnifiedBacktestEngine(config=config)
         self.logger = get_logger("walk_forward")
     
     async def run(
@@ -311,8 +317,13 @@ class WalkForwardAnalyzer:
 class ParameterPerturbation:
     """参数扰动测试"""
     
-    def __init__(self, engine: Optional[BacktestEngine] = None):
-        self.engine = engine or BacktestEngine()
+    def __init__(self, engine: Optional[UnifiedBacktestEngine] = None):
+        config = UnifiedConfig(
+            trade=TradeConfig(),
+            time=TimeConfig(),
+            features=FeatureFlag.ALL,
+        )
+        self.engine = engine or UnifiedBacktestEngine(config=config)
         self.logger = get_logger("parameter_perturbation")
     
     async def run(

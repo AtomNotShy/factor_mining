@@ -1,0 +1,34 @@
+# Factor Mining Framework Configuration Example
+
+# 交易基础设置
+trading:
+  stake_amount: 100000
+  max_open_trades: 5
+  timeframe: "1d"
+  dry_run: true
+
+# 券商设置
+broker:
+  name: "simulated"
+  commission: 0.001
+  slippage: 0.0005
+
+# 数据设置
+data:
+  datadir: "./data"
+  startup_candle_count: 200
+  universe:
+    - "AAPL"
+    - "TSLA"
+    - "MSFT"
+    - "NVDA"
+    - "QQQ"
+
+# 策略设置
+strategy:
+  name: "VectorizedRSISignal" # 必须与类名对应
+  params:
+    rsi_period: 14
+    rsi_lower: 30
+    rsi_upper: 70
+    lookahead_check: true

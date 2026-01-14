@@ -3,10 +3,17 @@
 使用Pydantic进行配置验证和类型检查
 """
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, model_validator
 from typing import List, Dict, Any, Optional
 import os
+from dotenv import load_dotenv
+from pathlib import Path
+
+# 加载 .env 文件到环境变量
+# 假设 .env 在项目根目录 (src 的上一级)
+env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 
 def _running_in_docker() -> bool:
@@ -272,13 +279,15 @@ class Settings(BaseSettings):
         set_nested("ib", "timeout", "ib_timeout")
         set_nested("ib", "readonly", "ib_readonly")
 
+        # 特殊处理：将遗留的直接在 values 中的 key 移除，避免干扰
         return values
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
-        extra = "ignore"
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="allow"
+    )
 
 
 # 全局配置实例

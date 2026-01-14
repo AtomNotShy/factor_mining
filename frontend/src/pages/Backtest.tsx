@@ -44,7 +44,7 @@ export default function Backtest() {
       const response = await api.get('/strategy-backtest/strategies')
       const loaded = response.data.strategies || []
       setStrategies(loaded)
-      
+
       // 如果当前策略不在列表中，自动选择第一个可用策略
       const current = loaded.find((strategy: Strategy) => strategy.name === formData.strategy_name)
       if (!current && loaded.length > 0) {
@@ -79,7 +79,7 @@ export default function Backtest() {
         commission_rate: formData.commission_rate,
         slippage_rate: formData.slippage_rate,
       }
-      
+
       // 处理日期
       if (dateMode === 'days') {
         submitData.days = formData.days
@@ -87,12 +87,12 @@ export default function Backtest() {
         submitData.start_date = formData.start_date
         submitData.end_date = formData.end_date
       }
-      
+
       // 处理 benchmark
       if (formData.benchmark_symbol) {
         submitData.benchmark_symbol = formData.benchmark_symbol
       }
-      
+
       // us_etf_momentum 策略：如果 symbol 为空，使用策略默认的 etf_pool
       if (formData.strategy_name === 'us_etf_momentum' && (!formData.symbol || !formData.symbol.trim())) {
         const selectedStrategy = strategies.find(s => s.name === formData.strategy_name)
@@ -104,13 +104,18 @@ export default function Backtest() {
           console.log(`使用策略默认 etf_pool: ${defaultEtfPool.join(', ')}`)
         }
       }
-      
+
       const response = await api.post('/strategy-backtest/run', submitData)
+
+      if (response.data?.error) {
+        throw new Error(response.data.error)
+      }
+
       setResults(response.data)
     } catch (err: any) {
       const data = err.response?.data
       let message: string
-      
+
       if (typeof data === 'string') {
         message = data
       } else if (Array.isArray(data?.detail)) {
@@ -341,22 +346,20 @@ export default function Backtest() {
                   <button
                     type="button"
                     onClick={() => setDateMode('days')}
-                    className={`px-3 py-1 text-xs rounded ${
-                      dateMode === 'days'
+                    className={`px-3 py-1 text-xs rounded ${dateMode === 'days'
                         ? 'bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900'
                         : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
-                    }`}
+                      }`}
                   >
                     Last N Days
                   </button>
                   <button
                     type="button"
                     onClick={() => setDateMode('range')}
-                    className={`px-3 py-1 text-xs rounded ${
-                      dateMode === 'range'
+                    className={`px-3 py-1 text-xs rounded ${dateMode === 'range'
                         ? 'bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900'
                         : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
-                    }`}
+                      }`}
                   >
                     Date Range
                   </button>

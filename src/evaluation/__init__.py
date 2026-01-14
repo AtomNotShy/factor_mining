@@ -5,10 +5,10 @@
 
 from .metrics.ic_analysis import ICAnalyzer
 from .metrics.performance import PerformanceAnalyzer
-from .backtesting.engine import BacktestEngine
+from .backtesting.unified_engine import UnifiedBacktestEngine
 
 __all__ = [
     "ICAnalyzer",
     "PerformanceAnalyzer", 
-    "BacktestEngine"
+    "UnifiedBacktestEngine"
 ] 

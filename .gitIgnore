@@ -4,7 +4,7 @@
 .env
 logs/*
 *.pyc
-venv/*
+.venv/*
 *.log
 .DS_Store
 
@@ -14,3 +14,4 @@ frontend/node_modules/*
 
 claude/*
 data/*
+reports/*

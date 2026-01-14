@@ -8,7 +8,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 import uvicorn
-from contextlib import asynccontextmanager
 
 from src.config.settings import get_settings
 from src.utils.logger import get_logger
@@ -17,53 +16,14 @@ from .routers import strategy_backtest
 
 logger = get_logger(__name__)
 
-# 全局 IBBroker 实例（可选）
-_ib_broker = None
 
-
-def get_ib_broker():
-    """获取全局 IBBroker 实例"""
-    return _ib_broker
-
-
-@asynccontextmanager
+@uvicorn.run
 async def lifespan(app: FastAPI):
     """应用程序生命周期管理"""
-    global _ib_broker
-    
-    # 启动时执行
     logger.info("启动 Factor Mining System API")
-    
-    try:
-        # 初始化数据库连接等
-        logger.info("初始化系统组件...")
-        
-        # 初始化 IBBroker（如果配置了）
-        settings = get_settings()
-        if settings.ib.host and settings.ib.port:
-            try:
-                from src.execution.ib_broker import IBBroker
-                _ib_broker = IBBroker()
-                await _ib_broker.connect()
-                logger.info("IBBroker 初始化成功")
-            except Exception as e:
-                logger.warning(f"IBBroker 初始化失败（将使用 PaperBroker）: {e}")
-                _ib_broker = None
-        else:
-            logger.info("未配置 IB 设置，跳过 IBBroker 初始化")
-        
-        yield
-        
-    finally:
-        # 关闭时执行
-        if _ib_broker is not None:
-            try:
-                await _ib_broker.disconnect()
-                logger.info("IBBroker 已断开连接")
-            except Exception as e:
-                logger.error(f"断开 IBBroker 连接时出错: {e}")
-        
-        logger.info("关闭 Factor Mining System API")
+    logger.info("初始化系统组件...")
+    yield
+    logger.info("关闭 Factor Mining System API")
 
 
 def create_app() -> FastAPI:
@@ -120,7 +80,6 @@ def create_app() -> FastAPI:
             loc = error.get('loc', [])
             field = loc[-1] if loc else '参数'
             msg = error.get('msg', '验证失败')
-            # 提取简洁的错误信息
             if 'Value error' in msg:
                 msg = msg.split(', Value error, ')[-1] if ', Value error, ' in msg else msg
             errors.append(f"{field}: {msg}")
@@ -134,6 +93,7 @@ def create_app() -> FastAPI:
     
     # 健康检查
     @app.get("/health")
+    @app.get("/api/v1/health")
     async def health_check():
         """健康检查端点"""
         return {
@@ -167,4 +127,4 @@ if __name__ == "__main__":
         port=settings.api.port,
         reload=settings.api.debug,
         log_level="info"
-    ) 
+    )

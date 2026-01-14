@@ -3,11 +3,22 @@
 提供策略与基准（如SPY）的对比分析功能
 """
 
-import pandas as pd
-import numpy as np
-from typing import Dict, List, Optional, Tuple
+import asyncio
 from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple, cast
+
+import numpy as np
+import pandas as pd
+from pandas.core.indexes.datetimes import DatetimeIndex
 from src.utils.logger import get_logger
+
+
+def _ensure_utc_tz(index: pd.Index) -> DatetimeIndex:
+    """确保索引时区为UTC的辅助函数"""
+    dt_idx = cast(DatetimeIndex, index)
+    if dt_idx.tz is None:
+        return dt_idx.tz_localize("UTC")
+    return dt_idx.tz_convert("UTC")
 
 
 @dataclass
@@ -68,6 +79,12 @@ class BenchmarkAnalyzer:
             df: Optional[pd.DataFrame | pd.Series] = None
 
             if data_source == "ib":
+                try:
+                    asyncio.get_running_loop()
+                    self.logger.warning("当前在运行事件循环中，跳过同步 IB 获取")
+                    return None
+                except RuntimeError:
+                    pass
                 from datetime import datetime, timezone as dt_timezone
                 from src.data.collectors.ib_history import IBHistoryCollector
                 collector = IBHistoryCollector()
@@ -85,16 +102,65 @@ class BenchmarkAnalyzer:
                 import os
                 safe_symbol = self.benchmark_symbol.upper().replace("/", "_")
                 data_dir = get_settings().storage.data_dir
-                cache_path = os.path.join(data_dir, "polygon/ohlcv/adjusted/utc/1d", f"{safe_symbol}.parquet")
-                if os.path.exists(cache_path):
-                    df = pd.read_parquet(cache_path)
+                
+                # 先尝试 Polygon 路径
+                polygon_path = os.path.join(data_dir, "polygon/ohlcv/adjusted/utc/1d", f"{safe_symbol}.parquet")
+                ib_path = os.path.join(data_dir, "ib/ohlcv/1d", f"{safe_symbol}.parquet")
+                
+                cache_path = polygon_path
+                if os.path.exists(polygon_path):
+                    df = pd.read_parquet(polygon_path)
                     if "datetime" in df.columns:
                         df["datetime"] = pd.to_datetime(df["datetime"])
                         df = df.set_index("datetime")
                     if not df.empty:
+                        # 确保索引是 DatetimeIndex
+                        if not isinstance(df.index, pd.DatetimeIndex):
+                            df.index = pd.to_datetime(df.index)
+                        
+                        # 强制统一时区为 UTC 以便对齐
+                        dt_idx = cast(DatetimeIndex, df.index)
+                        if dt_idx.tz is None:
+                            df.index = dt_idx.tz_localize("UTC")
+                        else:
+                            df.index = dt_idx.tz_convert("UTC")
+
+                        # 处理时区对齐后的过滤
                         start_ts = pd.Timestamp(start_date)
                         end_ts = pd.Timestamp(end_date)
+                        if start_ts.tz is None:
+                            start_ts = start_ts.tz_localize("UTC")
+                        else:
+                            start_ts = start_ts.tz_convert("UTC")
+                        if end_ts.tz is None:
+                            end_ts = end_ts.tz_localize("UTC")
+                        else:
+                            end_ts = end_ts.tz_convert("UTC")
+                        
                         df = df[(df.index >= start_ts) & (df.index <= end_ts)]
+                
+                # 如果 Polygon 数据不足，尝试 IB 路径
+                if df is None or len(df) == 0:
+                    if os.path.exists(ib_path):
+                        cache_path = ib_path
+                        df = pd.read_parquet(ib_path)
+                        if "datetime" in df.columns:
+                            df["datetime"] = pd.to_datetime(df["datetime"])
+                            df = df.set_index("datetime")
+                        if not df.empty:
+                            # 确保索引是 DatetimeIndex
+                            if not isinstance(df.index, pd.DatetimeIndex):
+                                df.index = pd.to_datetime(df.index)
+                            
+                            # 强制统一时区为 UTC 以便对齐
+                            dt_idx = cast(DatetimeIndex, df.index)
+                            if dt_idx.tz is None:
+                                df.index = dt_idx.tz_localize("UTC")
+                            else:
+                                df.index = dt_idx.tz_convert("UTC")
+
+                            # 处理时区对齐后的过滤
+                            df = df[(df.index >= start_ts) & (df.index <= end_ts)]
 
             if df is not None and len(df) > 0:
                 self._benchmark_cache[cache_key] = df
@@ -133,9 +199,16 @@ class BenchmarkAnalyzer:
             if len(strategy_returns) == 0 or len(benchmark_returns) == 0:
                 return strategy_returns, benchmark_returns
             
-            combined_index = strategy_returns.index.union(benchmark_returns.index)
-            strategy_aligned = strategy_returns.reindex(combined_index).dropna()
-            benchmark_aligned = benchmark_returns.reindex(combined_index).dropna()
+            # 统一时区为 UTC 并归一化到日期 (midnight) 以便对齐
+            s_norm = strategy_returns.copy()
+            s_norm.index = _ensure_utc_tz(s_norm.index).normalize()
+            
+            b_norm = benchmark_returns.copy()
+            b_norm.index = _ensure_utc_tz(b_norm.index).normalize()
+            
+            combined_index = s_norm.index.union(b_norm.index)
+            strategy_aligned = s_norm.reindex(combined_index).dropna()
+            benchmark_aligned = b_norm.reindex(combined_index).dropna()
             
             common_index = strategy_aligned.index.intersection(benchmark_aligned.index)
             return strategy_aligned.reindex(common_index), benchmark_aligned.reindex(common_index)

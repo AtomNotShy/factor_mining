@@ -4,19 +4,21 @@
 """
 
 from datetime import datetime, date, timedelta
-from typing import List, Optional
+from typing import List, Optional, Dict, Union
 import pandas as pd
 from src.utils.logger import get_logger
 
 
 class TradingCalendar:
     """交易日历（美股）"""
-    
+
     def __init__(self):
         self.logger = get_logger("trading_calendar")
         self._calendar = self._load_calendar()
         # 美股主要节假日（简化版，优先使用 pandas_market_calendars）
         self.holidays = self._load_holidays()
+        # 交易分钟数据缓存
+        self._trading_minutes_cache: Dict[str, pd.DatetimeIndex] = {}
 
     def _load_calendar(self):
         """加载 pandas_market_calendars 的交易日历（优先）"""
@@ -69,15 +71,20 @@ class TradingCalendar:
                 self.logger.debug(f"通过交易日推断节假日失败，回退USFederalHolidayCalendar: {e}")
 
         try:
-            from pandas.tseries.holiday import USFederalHolidayCalendar, Easter
-            from pandas.tseries.offsets import Day
+            from pandas.tseries.holiday import USFederalHolidayCalendar
+            from pandas.tseries.offsets import Easter
 
             calendar = USFederalHolidayCalendar()
             holiday_index = calendar.holidays(start=start, end=end)
 
+            # 向量化计算好的星期五（耶稣受难日前两天）
             years = pd.date_range(start, end, freq="YS")
-            good_fridays = (years + Easter()) - Day(2)
-            holiday_index = holiday_index.union(good_fridays)
+            # 使用向量化方式计算
+            good_fridays = pd.DatetimeIndex([
+                (pd.Timestamp(y) + Easter() - pd.Timedelta(days=2)).date()
+                for y in years
+            ])
+            holiday_index = holiday_index.union(pd.DatetimeIndex(good_fridays))
 
             return [d.date() for d in holiday_index]
         except Exception as e:
@@ -180,11 +187,11 @@ class TradingCalendar:
     def get_trading_days(self, start: date, end: date) -> pd.DatetimeIndex:
         """
         获取交易日范围（返回DatetimeIndex）
-        
+
         Args:
             start: 起始日期
             end: 结束日期
-            
+
         Returns:
             交易日DatetimeIndex
         """
@@ -193,3 +200,134 @@ class TradingCalendar:
 
         days = self.trading_days_between(start, end)
         return pd.DatetimeIndex([pd.Timestamp(d) for d in days])
+
+    def get_schedule(
+        self,
+        start: Union[datetime, date],
+        end: Union[datetime, date],
+        tz: str = "America/New_York",
+    ) -> pd.DataFrame:
+        """
+        返回交易时段信息表
+
+        Args:
+            start: 起始日期
+            end: 结束日期
+            tz: 时区，默认"America/New_York"
+
+        Returns:
+            DataFrame with columns:
+            - market_open: NYSE开市时间 (ET)
+            - market_close: NYSE收市时间 (ET)
+        """
+        if self._calendar is None:
+            self.logger.warning("pandas_market_calendars 未可用，返回空schedule")
+            empty_series = pd.Series([], dtype="datetime64[ns, America/New_York]")
+            return pd.DataFrame({"market_open": empty_series, "market_close": empty_series})
+
+        start_ts = pd.Timestamp(start)
+        end_ts = pd.Timestamp(end)
+
+        schedule = self._calendar.schedule(start_date=start_ts, end_date=end_ts)
+        return schedule
+
+    def get_trading_minutes(
+        self,
+        start: Union[datetime, date],
+        end: Union[datetime, date],
+        tz: str = "America/New_York",
+        interval: str = "1min",
+    ) -> pd.DatetimeIndex:
+        """
+        返回会话内分钟级时间轴（建议缓存）
+
+        Args:
+            start: 起始日期
+            end: 结束日期
+            tz: 时区，默认"America/New_York"
+            interval: 时间间隔，默认"1min"
+
+        Returns:
+            UTC时间戳的DatetimeIndex
+        """
+        start_ts = pd.Timestamp(start)
+        end_ts = pd.Timestamp(end)
+        # 处理 NaT 情况
+        if pd.isna(start_ts) or pd.isna(end_ts):
+            self.logger.warning("start 或 end 日期无效，返回空分钟时间轴")
+            return pd.DatetimeIndex([])
+        # 转换为 datetime 以避免类型问题
+        start_dt = start_ts.to_pydatetime()
+        end_dt = end_ts.to_pydatetime()
+        start_str = start_dt.strftime("%Y%m%d")  # type: ignore[union-attr]
+        end_str = end_dt.strftime("%Y%m%d")  # type: ignore[union-attr]
+        cache_key = f"{start_str}_{end_str}_{tz}_{interval}"
+
+        if cache_key in self._trading_minutes_cache:
+            return self._trading_minutes_cache[cache_key]
+
+        if self._calendar is None:
+            self.logger.warning("pandas_market_calendars 未可用，返回空分钟时间轴")
+            return pd.DatetimeIndex([])
+
+        # 使用类型断言绕过类型检查
+        schedule = self.get_schedule(start_dt, end_dt, tz)  # type: ignore[arg-type]
+
+        minutes_list = []
+        for idx, row in schedule.iterrows():
+            market_open = row["market_open"]
+            market_close = row["market_close"]
+
+            session_minutes = pd.date_range(
+                start=market_open, end=market_close, freq=interval
+            )
+            minutes_list.append(session_minutes)
+
+        if minutes_list:
+            all_minutes = minutes_list[0]
+            for idx in minutes_list[1:]:
+                all_minutes = all_minutes.union(idx)
+        else:
+            all_minutes = pd.DatetimeIndex([])
+
+        self._trading_minutes_cache[cache_key] = all_minutes
+        return all_minutes
+
+    def session_time(
+        self, date_obj: date, hhmm: str = "09:50", tz: str = "America/New_York"
+    ) -> pd.Timestamp:
+        """
+        将"指定时刻"映射到UTC时间戳
+
+        Args:
+            date_obj: 日期
+            hhmm: 时间字符串，格式为"HH:MM"，默认"09:50"
+            tz: 时区，默认"America/New_York"
+
+        Returns:
+            UTC时间戳
+
+        Example:
+            >>> calendar.session_time(date(2024, 1, 2), "09:50")
+            Timestamp('2024-01-02 14:50:00+00:00')  # UTC
+        """
+        time_parts = hhmm.split(":")
+        if len(time_parts) != 2:
+            raise ValueError(f"hhmm 格式错误，应为 'HH:MM'，实际为 '{hhmm}'")
+
+        hour, minute = int(time_parts[0]), int(time_parts[1])
+
+        local_time = pd.Timestamp(
+            year=date_obj.year,
+            month=date_obj.month,
+            day=date_obj.day,
+            hour=hour,
+            minute=minute,
+            tz=tz,
+        )
+
+        utc_time = local_time.tz_convert("UTC")
+        # 处理 NaT 情况
+        if pd.isna(utc_time):  # type: ignore[comparison-overlap]
+            raise ValueError(f"无法将 {date_obj} {hhmm} {tz} 转换为有效的 UTC 时间")
+        return utc_time  # type: ignore[return-value]

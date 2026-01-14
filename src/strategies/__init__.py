@@ -21,6 +21,8 @@ def _iter_strategy_modules() -> Iterable[str]:
         name = module_info.name
         if ".base." in name or name.endswith(".base"):
             continue
+        if ".user_strategies" in name:
+            continue
         if name.endswith(".__init__"):
             continue
         yield name

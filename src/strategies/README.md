@@ -1,26 +1,57 @@
 # 策略系统使用指南
 
-## 概述
+## 目录结构
 
-策略系统使用统一的 v2 接口：`generate_signals()` 生成信号，`size_positions()` 输出订单意图。
+```
+src/strategies/
+├── base/               # 框架核心（用户不直接编辑）
+│   ├── strategy.py         # Strategy 基类
+│   ├── parameters.py       # 参数定义
+│   ├── vectorized_strategy.py  # 向量化策略基类
+│   └── informative.py      # 多时间框架支持
+│
+├── components/         # 可复用组件
+│   ├── scorers.py      # 评分器（MomentumScorer, RSIScorer 等）
+│   └── filters.py      # 过滤器（RangeFilter, DrawdownFilter 等）
+│
+├── examples/           # 教学示例（供学习参考）
+│   ├── simple_momentum.py  # 简单动量策略
+│   └── simple_ma.py        # 简单均线策略
+│
+└── user_strategies/    # 用户策略（用户编写处）
+    ├── __init__.py          # 自动注册所有策略
+    ├── etf_momentum_us.py   # ETF动量轮动策略
+    └── your_strategy.py     # 你的新策略
+```
 
-## 开源示例策略
+## 策略分类
 
-位于 [`src/strategies/example/`](example/__init__.py)：
+### 框架代码 (`base/`, `components/`)
+**用户不应修改**，包含：
+- [`Strategy`](base/strategy.py) - 所有策略的基类
+- 参数系统和自动注册机制
+- 多时间框架支持
 
-| 策略ID | 名称 | 说明 |
-|--------|------|------|
-| `simple_momentum` | 简单动量 | 收益率排名，买入最强的 |
-| `simple_ma` | 简单均线 | MA 交叉，金叉做多 |
+### 教学示例 (`examples/`)
+**供学习参考**，包含简单策略实现：
+- `SimpleMomentumStrategy` - 简单动量排名
+- `SimpleMAStrategy` - 均线交叉
+
+### 用户策略 (`user_strategies/`)
+**用户编写策略的目录**，框架会自动加载此目录下的策略。
+
+## 导入示例
 
 ```python
+# 导入用户策略
+from src.strategies.user_strategies import USETFMomentumStrategy
+
+# 导入示例策略
 from src.strategies.example import SimpleMomentumStrategy, SimpleMAStrategy
 
-# 动量策略
-s1 = SimpleMomentumStrategy()
-
-# 均线策略
-s2 = SimpleMAStrategy()
+# 导入框架基类
+from src.strategies.base.strategy import Strategy
+from src.strategies.base.parameters import IntParameter, DecimalParameter
 ```
 
 ## 快速开始
@@ -30,12 +61,15 @@ import asyncio
 from datetime import date
 from src.core.context import RunContext, Environment
 from src.core.calendar import TradingCalendar
-from src.evaluation.backtesting.engine import BacktestEngine
-from src.strategies.example import SimpleMomentumStrategy
+from src.evaluation.backtesting.unified_engine import UnifiedBacktestEngine, UnifiedConfig, TradeConfig
+from src.strategies.user_strategies import USETFMomentumStrategy
 
 async def run_backtest():
-    strategy = SimpleMomentumStrategy()
-    engine = BacktestEngine(initial_capital=100000)
+    strategy = USETFMomentumStrategy()
+    config = UnifiedConfig(
+        trade=TradeConfig(initial_capital=100000),
+    )
+    engine = UnifiedBacktestEngine(config=config)
 
     ctx = RunContext(
         env=Environment.BACKTEST,
@@ -55,6 +89,8 @@ asyncio.run(run_backtest())
 ```
 
 ## 创建自定义策略
+
+将新策略放在 `user_strategies/` 目录下：
 
 ```python
 from typing import List
@@ -78,5 +114,3 @@ class MyStrategy(Strategy):
 ```
 
 策略会自动注册，无需手动调用。
-
-##

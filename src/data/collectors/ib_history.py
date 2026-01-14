@@ -44,6 +44,7 @@ class IBHistoryCollector(BaseDataCollector):
         
         self.ib: Optional[IB] = None
         self._connected = False
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         
         self._cache_subdir = "ib/ohlcv"
         
@@ -54,8 +55,21 @@ class IBHistoryCollector(BaseDataCollector):
     async def connect(self) -> bool:
         """连接到IB Gateway/TWS"""
         try:
-            if self.ib and self._connected:
-                return True
+            current_loop = asyncio.get_running_loop()
+            if self.ib is not None:
+                loop_changed = self._loop is not None and self._loop is not current_loop
+                loop_closed = self._loop is not None and self._loop.is_closed()
+                if self._connected and (loop_changed or loop_closed):
+                    self.logger.warning("检测到IB连接事件循环变更，正在重建连接")
+                    try:
+                        self.ib.disconnect()
+                    except Exception as e:
+                        self.logger.warning(f"断开IB连接时出错: {e}")
+                    self.ib = None
+                    self._connected = False
+                    self._loop = None
+                elif self._connected:
+                    return True
 
             self.ib = IB()
             await self.ib.connectAsync(
@@ -65,10 +79,14 @@ class IBHistoryCollector(BaseDataCollector):
                 timeout=10,
             )
             self._connected = True
+            self._loop = current_loop
             self.logger.info(f"已连接到IB: {self.host}:{self.port} (client_id={self.client_id})")
             return True
         except Exception as e:
             self.logger.error(f"连接IB失败: {e}")
+            self.ib = None
+            self._connected = False
+            self._loop = None
             return False
 
     async def disconnect(self):
@@ -82,6 +100,7 @@ class IBHistoryCollector(BaseDataCollector):
             finally:
                 self.ib = None
                 self._connected = False
+                self._loop = None
 
     def validate_symbol(self, symbol: str) -> bool:
         """验证标的代码格式"""
@@ -310,12 +329,26 @@ class IBHistoryCollector(BaseDataCollector):
         end: Optional[datetime],
     ) -> pd.DataFrame:
         """从IB获取数据（同步）"""
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop is not None:
+            raise RuntimeError("当前在运行中的事件循环内调用同步方法，请使用 get_ohlcv_async")
+
         loop = asyncio.new_event_loop()
         try:
+            asyncio.set_event_loop(loop)
             return loop.run_until_complete(
                 self._fetch_from_ib_async(symbol, timeframe, since, end)
             )
         finally:
+            try:
+                if self._connected and self._loop is loop:
+                    loop.run_until_complete(self.disconnect())
+            finally:
+                asyncio.set_event_loop(None)
             loop.close()
 
     async def _fetch_from_ib_async(

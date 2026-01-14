@@ -100,14 +100,14 @@ class UnifiedDataManager:
             end_ts = pd.Timestamp(download_end)
             
             # 检查是否为有效时间戳
-            if pd.isna(start_ts) or pd.isna(end_ts):
+            if pd.isna(start_ts) or pd.isna(end_ts):  # type: ignore[comparison-overlap]
                 logger.warning(f"无效的时间戳: start={start_ts}, end={end_ts}, 使用默认值")
                 estimated_bars = DEFAULT_ESTIMATED_BARS
             else:
                 # 计算时间差
                 time_diff = end_ts - start_ts
                 
-                if pd.isna(time_diff) or time_diff <= pd.Timedelta(0):
+                if pd.isna(time_diff) or time_diff <= pd.Timedelta(0):  # type: ignore[comparison-overlap]
                     # 无效或负的时间差
                     estimated_bars = DEFAULT_ESTIMATED_BARS
                 else:
@@ -201,13 +201,17 @@ class UnifiedDataManager:
             # 安全获取 Timestamp，处理可能的 NaT
             if isinstance(idx_min, pd.Timestamp):
                 full_start = idx_min
+            elif idx_min is not None:
+                full_start = pd.Timestamp(idx_min)  # type: ignore[arg-type]
             else:
-                full_start = pd.Timestamp(idx_min) if idx_min is not None else None  # type: ignore[arg-type]
+                full_start = None
                 
             if isinstance(idx_max, pd.Timestamp):
                 full_end = idx_max
+            elif idx_max is not None:
+                full_end = pd.Timestamp(idx_max)  # type: ignore[arg-type]
             else:
-                full_end = pd.Timestamp(idx_max) if idx_max is not None else None  # type: ignore[arg-type]
+                full_end = None
             
             check_start_ts = pd.Timestamp(start)
             check_end_ts = pd.Timestamp(end)
@@ -223,7 +227,9 @@ class UnifiedDataManager:
                         normalized_expected.append(d)
                     else:
                         try:
-                            normalized_expected.append(pd.Timestamp(d).date())
+                            ts = pd.Timestamp(d)
+                            if ts is not pd.NaT:
+                                normalized_expected.append(ts.date())
                         except Exception:
                             continue
                 if normalized_expected:
@@ -255,15 +261,17 @@ class UnifiedDataManager:
                     normalized_expected.append(d)
                 else:
                     try:
-                        normalized_expected.append(pd.Timestamp(d).date())
+                        ts = pd.Timestamp(d)
+                        if ts is not pd.NaT:
+                            normalized_expected.append(ts.date())
                     except Exception:
                         continue
             
             if normalized_expected:
                 expected_set = sorted(set(normalized_expected))
                 # 安全获取日期集合
-                index_dates = pd.to_datetime(df_full.index).normalize()
-                available_dates = set(d.date() for d in index_dates)
+                index_dates = pd.to_datetime(df_full.index).normalize()  # type: ignore[union-attr]
+                available_dates = set(d.date() for d in index_dates)  # type: ignore[union-attr]
                 
                 check_start_date = start.date() if hasattr(start, 'date') else pd.Timestamp(start).date()
                 check_end_date = end.date() if hasattr(end, 'date') else pd.Timestamp(end).date()

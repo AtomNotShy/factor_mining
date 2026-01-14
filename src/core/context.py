@@ -3,9 +3,9 @@
 包含环境、版本、配置等运行时信息
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
 from enum import Enum
 import hashlib
 import json
@@ -29,6 +29,8 @@ class RunContext:
     config_hash: str  # 配置hash（用于可重放）
     now_utc: datetime  # 当前UTC时间
     trading_calendar: TradingCalendar  # 交易日历
+    config: Dict[str, Any] = field(default_factory=dict)  # 源配置字典
+    cross_section: Optional[Dict[str, Any]] = None  # 横截面数据（用于向量化轮动策略）
     
     @classmethod
     def create(
@@ -36,7 +38,7 @@ class RunContext:
         env: Environment,
         code_version: Optional[str] = None,
         data_version: Optional[str] = None,
-        config: Optional[dict] = None,
+        config: Optional[Dict[str, Any]] = None,
         trading_calendar: Optional[TradingCalendar] = None,
     ) -> "RunContext":
         """
@@ -73,6 +75,7 @@ class RunContext:
             config_hash=config_hash,
             now_utc=datetime.utcnow(),
             trading_calendar=trading_calendar,
+            config=config,
         )
     
     @staticmethod
@@ -93,13 +96,13 @@ class RunContext:
         return None
     
     @staticmethod
-    def _hash_config(config: dict) -> str:
+    def _hash_config(config: Dict[str, Any]) -> str:
         """生成配置的稳定hash"""
         # 排序键以确保一致性
         config_str = json.dumps(config, sort_keys=True, default=str)
         return hashlib.sha256(config_str.encode()).hexdigest()[:16]
     
-    def to_dict(self) -> dict:
+    def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
             "env": self.env.value,
@@ -107,4 +110,5 @@ class RunContext:
             "data_version": self.data_version,
             "config_hash": self.config_hash,
             "now_utc": self.now_utc.isoformat(),
+            "config": self.config,
         }

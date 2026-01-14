@@ -139,6 +139,16 @@ export default function BacktestDetails({ data, onBack, onRerun }: BacktestDetai
   const [showBenchmark, setShowBenchmark] = useState(true)
   const [selectedTradePage, setSelectedTradePage] = useState(1)
 
+  // Guard against invalid data
+  if (!data || !data.backtest_period || !data.config) {
+    return (
+      <div className="p-8 text-center text-red-500">
+        Error: Invalid backtest data format. Missing critical fields.
+        <button onClick={onBack} className="ml-4 underline">Go Back</button>
+      </div>
+    )
+  }
+
   const m = data.enhanced_metrics || {}
   const eq = data.equity_comparison || {}
   const benchmarkLabel = data.benchmark_data?.symbol || 'Benchmark'
@@ -364,8 +374,8 @@ export default function BacktestDetails({ data, onBack, onRerun }: BacktestDetai
             </div>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}> 
-          <button 
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
             onClick={onRerun}
             style={{
               padding: '6px 16px',
@@ -508,7 +518,7 @@ export default function BacktestDetails({ data, onBack, onRerun }: BacktestDetai
                 {/* Performance Summary - All Key Metrics */}
                 <div style={{ ...panelStyle, padding: 16 }}>
                   <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>Performance Summary</div>
-                  
+
                   {/* Return & Benchmark Metrics */}
                   <div style={{ fontSize: 12, fontWeight: 600, color: isDark ? '#787b86' : '#6b7280', marginBottom: 8, textTransform: 'uppercase' }}>Returns</div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
@@ -526,7 +536,7 @@ export default function BacktestDetails({ data, onBack, onRerun }: BacktestDetai
                       </div>
                     ))}
                   </div>
-                  
+
                   {/* Risk & Alpha/Beta Metrics */}
                   <div style={{ fontSize: 12, fontWeight: 600, color: isDark ? '#787b86' : '#6b7280', marginBottom: 8, textTransform: 'uppercase' }}>Risk & Alpha/Beta</div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
@@ -544,7 +554,7 @@ export default function BacktestDetails({ data, onBack, onRerun }: BacktestDetai
                       </div>
                     ))}
                   </div>
-                  
+
                   {/* Volatility & Drawdown */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
                     {[
@@ -561,7 +571,7 @@ export default function BacktestDetails({ data, onBack, onRerun }: BacktestDetai
                       </div>
                     ))}
                   </div>
-                  
+
                   {/* Win Rate & Trade Metrics */}
                   <div style={{ fontSize: 12, fontWeight: 600, color: isDark ? '#787b86' : '#6b7280', marginBottom: 8, textTransform: 'uppercase' }}>Trade Statistics</div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>

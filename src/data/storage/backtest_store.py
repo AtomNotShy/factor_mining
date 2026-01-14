@@ -122,6 +122,15 @@ class BacktestStore:
             if not symbol_value and isinstance(universe, list) and universe:
                 symbol_value = ",".join(universe)
 
+            def safe_f(v):
+                if v is None: return None
+                try:
+                    import numpy as np
+                    fv = float(v)
+                    if np.isnan(fv) or np.isinf(fv): return None
+                    return fv
+                except: return None
+
             record = BacktestRecord(
                 id=backtest_id,
                 strategy_name=backtest_result.get('strategy_name', ''),
@@ -130,20 +139,20 @@ class BacktestStore:
                 start_date=backtest_period.get('start_date', ''),
                 end_date=backtest_period.get('end_date', ''),
                 initial_capital=backtest_result.get('config', {}).get('initial_capital', 0),
-                final_value=results.get('final_value', performance.get('final_equity', 0)),
-                total_return=results.get('total_return', performance.get('total_return', 0)),
-                sharpe_ratio=(
+                final_value=safe_f(results.get('final_value', performance.get('final_equity', 0))),
+                total_return=safe_f(results.get('total_return', performance.get('total_return', 0))),
+                sharpe_ratio=safe_f(
                     perf_stats.get('sharpe_ratio')
                     if perf_stats.get('sharpe_ratio') is not None
                     else performance.get('sharpe_ratio', enhanced.get('sharpe_ratio'))
                 ),
-                max_drawdown=(
+                max_drawdown=safe_f(
                     perf_stats.get('max_drawdown')
                     if perf_stats.get('max_drawdown') is not None
                     else performance.get('max_drawdown', enhanced.get('max_drawdown'))
                 ),
                 total_trades=trade_stats_source.get('total_trades', 0),
-                win_rate=win_rate
+                win_rate=safe_f(win_rate)
             )
             
             # 保存完整结果

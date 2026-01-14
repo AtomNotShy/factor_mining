@@ -7,7 +7,8 @@ import time
 from typing import Dict, List, Any
 import pandas as pd
 from .optimizer_base import OptimizerBase, OptimizationResult
-from src.evaluation.backtesting.engine import BacktestEngine
+from src.evaluation.backtesting.unified_engine import UnifiedBacktestEngine, UnifiedConfig, FeatureFlag
+from src.evaluation.backtesting.config import TradeConfig, TimeConfig
 from src.core.context import RunContext, Environment
 from src.core.calendar import TradingCalendar
 from datetime import datetime
@@ -26,11 +27,17 @@ class GridSearchOptimizer(OptimizerBase):
         values = list(param_space.values())
         combinations = [dict(zip(keys, combo)) for combo in itertools.product(*values)]
         
-        engine = BacktestEngine(
-            initial_capital=backtest_config.get("initial_capital", 100000.0),
-            commission_rate=backtest_config.get("commission_rate", 0.001),
-            slippage_rate=backtest_config.get("slippage_rate", 0.0005)
+        # 使用 UnifiedBacktestEngine
+        config = UnifiedConfig(
+            trade=TradeConfig(
+                initial_capital=backtest_config.get("initial_capital", 100000.0),
+                commission_rate=backtest_config.get("commission_rate", 0.001),
+                slippage_rate=backtest_config.get("slippage_rate", 0.0005),
+            ),
+            time=TimeConfig(signal_timeframe="1d"),
+            features=FeatureFlag.ALL,
         )
+        engine = UnifiedBacktestEngine(config=config)
         
         # 预加载数据以提速
         start_date = backtest_config["start_date"]

@@ -265,8 +265,16 @@ class EnhancedAnalyzer:
             benchmark_df = self.benchmark_analyzer.get_benchmark_data(
                 start_date=start_date,
                 end_date=end_date,
-                data_source="ib"
+                data_source="local"
             )
+            
+            # 如果本地没有，尝试从 IB 获取
+            if benchmark_df is None or benchmark_df.empty:
+                benchmark_df = self.benchmark_analyzer.get_benchmark_data(
+                    start_date=start_date,
+                    end_date=end_date,
+                    data_source="ib"
+                )
             
             if benchmark_df is None or benchmark_df.empty:
                 self.logger.warning(f"无法获取基准数据: {self.benchmark_symbol}")
