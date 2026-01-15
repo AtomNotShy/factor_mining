@@ -150,6 +150,26 @@ class USETFJoinQuantRotationStrategy(FreqtradeStrategy, FreqtradeLifecycleMixin)
     # 构造函数
     # ============================================================================
 
+    # 参数名到类属性的映射（用于 __init__）
+    _PARAM_MAPPING = {
+        'strategy_id': 'strategy_id',
+        'etf_pool': 'etf_pool',
+        'min_lookback_days': 'min_lookback_days',
+        'max_lookback_days': 'max_lookback_days',
+        'use_dynamic_lookback': 'use_dynamic_lookback',
+        'atr_period': 'atr_period',
+        'r2_threshold': 'r2_threshold',
+        'decline_filter_days': 'decline_filter_days',
+        'decline_filter_threshold': 'decline_filter_threshold',
+        'consecutive_decline_threshold': 'consecutive_decline_threshold',
+        'target_positions': 'target_positions',
+        'max_weight': 'max_weight',
+        'min_weight': 'min_weight',
+        'stoploss': 'stoploss',
+        'trailing_stop': 'trailing_stop',
+        'trailing_stop_positive': 'trailing_stop_positive',
+    }
+
     def __init__(
         self,
         strategy_id: Optional[str] = None,
@@ -169,63 +189,14 @@ class USETFJoinQuantRotationStrategy(FreqtradeStrategy, FreqtradeLifecycleMixin)
         trailing_stop: Optional[bool] = None,
         trailing_stop_positive: Optional[float] = None,
     ):
-        """
-        初始化策略实例
-
-        Args:
-            strategy_id: 策略ID
-            etf_pool: ETF标的池
-            min_lookback_days: 最小回溯天数
-            max_lookback_days: 最大回溯天数
-            use_dynamic_lookback: 是否使用动态回溯期
-            atr_period: ATR计算周期
-            r2_threshold: R²最小阈值
-            decline_filter_days: 跌幅过滤天数
-            decline_filter_threshold: 跌幅过滤阈值
-            consecutive_decline_threshold: 连续下跌过滤阈值
-            target_positions: 目标持仓数量
-            max_weight: 单标最大权重
-            min_weight: 单标最小权重
-            stoploss: 止损比例
-            trailing_stop: 是否启用追踪止损
-            trailing_stop_positive: 追踪止损正偏差
-        """
-        # 调用父类构造函数
+        """初始化策略实例"""
         super().__init__()
 
-        # 覆盖默认值（如果提供了参数）
-        if strategy_id is not None:
-            self.strategy_id = strategy_id
-        if etf_pool is not None:
-            self.etf_pool = etf_pool
-        if min_lookback_days is not None:
-            self.min_lookback_days = min_lookback_days
-        if max_lookback_days is not None:
-            self.max_lookback_days = max_lookback_days
-        if use_dynamic_lookback is not None:
-            self.use_dynamic_lookback = use_dynamic_lookback
-        if atr_period is not None:
-            self.atr_period = atr_period
-        if r2_threshold is not None:
-            self.r2_threshold = r2_threshold
-        if decline_filter_days is not None:
-            self.decline_filter_days = decline_filter_days
-        if decline_filter_threshold is not None:
-            self.decline_filter_threshold = decline_filter_threshold
-        if consecutive_decline_threshold is not None:
-            self.consecutive_decline_threshold = consecutive_decline_threshold
-        if target_positions is not None:
-            self.target_positions = target_positions
-        if max_weight is not None:
-            self.max_weight = max_weight
-        if min_weight is not None:
-            self.min_weight = min_weight
-        if stoploss is not None:
-            self.stoploss = stoploss
-        if trailing_stop is not None:
-            self.trailing_stop = trailing_stop
-        if trailing_stop_positive is not None:
-            self.trailing_stop_positive = trailing_stop_positive
+        # 使用循环简化参数覆盖
+        for param_name, attr_name in self._PARAM_MAPPING.items():
+            value = locals().get(param_name)
+            if value is not None:
+                setattr(self, attr_name, value)
 
         self.logger = get_logger(f"strategy.{self.strategy_id}")
 
@@ -309,45 +280,64 @@ class USETFJoinQuantRotationStrategy(FreqtradeStrategy, FreqtradeLifecycleMixin)
             self.logger.warning(f"动态回溯期计算失败: {e}")
             return self.min_lookback_days
 
-    def _calculate_weighted_regression_momentum(self, prices: pd.Series, lookback: Optional[int] = None) -> Dict[str, Any]:
+    def _calculate_weighted_regression_vectorized(
+        self,
+        prices: pd.Series,
+        lookback: int,
+    ) -> pd.DataFrame:
         """
-        计算加权线性回归动量（聚宽风格）
-
-        使用加权最小二乘法，近期数据权重更高
+        向量化计算加权线性回归动量
 
         Args:
             prices: 价格序列
-            lookback: 回溯期（如果为None，使用动态计算或默认值）
+            lookback: 回溯期
 
         Returns:
-            Dict包含 momentum, r2, annual_volatility, valid, lookback_used
+            包含动量结果的 Series（与输入同长度，末尾有效）
         """
-        if lookback is None:
-            lookback = self.min_lookback_days
-        
-        if len(prices) < lookback:
-            return {
-                "momentum": 0.0,
-                "r2": 0.0,
-                "annual_volatility": 0.0,
-                "valid": False,
-                "lookback_used": lookback,
-                "error": f"数据不足 {lookback} 天"
-            }
+        n = len(prices)
+        if n < lookback:
+            return pd.DataFrame({
+                'momentum': [0.0] * n,
+                'r2': [0.0] * n,
+                'annual_volatility': [0.0] * n,
+                'valid': [False] * n,
+                'lookback_used': [lookback] * n,
+            }, index=prices.index)
 
-        # 使用最近lookback天的数据
-        recent_prices = prices.iloc[-lookback:] if len(prices) > lookback else prices
-        n = len(recent_prices)
+        # 创建权重向量（线性递增）
+        weights = np.linspace(self.WEIGHT_START, self.WEIGHT_END, lookback)
 
-        # 创建加权向量（线性递增权重）
-        # 近期数据权重更高，权重范围 [1, 2]
-        weights = np.linspace(self.WEIGHT_START, self.WEIGHT_END, n)
+        # 使用滑动窗口计算
+        results = []
+        for i in range(n):
+            if i < lookback - 1:
+                results.append({
+                    'momentum': 0.0,
+                    'r2': 0.0,
+                    'annual_volatility': 0.0,
+                    'valid': False,
+                    'lookback_used': lookback,
+                })
+                continue
 
-        try:
+            start_idx = i - lookback + 1
+            window_prices = prices.iloc[start_idx:i + 1]
+
+            if len(window_prices) < lookback:
+                results.append({
+                    'momentum': 0.0,
+                    'r2': 0.0,
+                    'annual_volatility': 0.0,
+                    'valid': False,
+                    'lookback_used': lookback,
+                })
+                continue
+
             # 对数价格
-            y = np.log(recent_prices.values)
-            x = np.arange(n)
-            
+            y = np.log(window_prices.values)
+            x = np.arange(lookback)
+
             # 加权线性回归
             sum_w = np.sum(weights)
             sum_xw = np.sum(x * weights)
@@ -357,14 +347,14 @@ class USETFJoinQuantRotationStrategy(FreqtradeStrategy, FreqtradeLifecycleMixin)
 
             denominator = sum_w * sum_x2w - sum_xw**2
             if abs(denominator) < 1e-10:
-                return {
-                    "momentum": 0.0,
-                    "r2": 0.0,
-                    "annual_volatility": 0.0,
-                    "valid": False,
-                    "lookback_used": lookback,
-                    "error": "线性回归分母接近零"
-                }
+                results.append({
+                    'momentum': 0.0,
+                    'r2': 0.0,
+                    'annual_volatility': 0.0,
+                    'valid': False,
+                    'lookback_used': lookback,
+                })
+                continue
 
             slope = (sum_w * sum_xyw - sum_xw * sum_yw) / denominator
             intercept = (sum_yw - slope * sum_xw) / sum_w
@@ -372,38 +362,98 @@ class USETFJoinQuantRotationStrategy(FreqtradeStrategy, FreqtradeLifecycleMixin)
             # 年化收益率
             annual_return = math.exp(slope * self.TRADING_DAYS) - 1
 
-            # 计算R²
+            # R²
             y_pred = slope * x + intercept
             ss_res = np.sum(weights * (y - y_pred)**2)
             ss_tot = np.sum(weights * (y - np.mean(y))**2)
             r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
 
-            # 波动率（年化）
-            returns = np.diff(np.log(recent_prices.values))
-            if len(returns) >= 2:
-                annual_volatility = float(np.std(returns) * np.sqrt(self.TRADING_DAYS))
-            else:
-                annual_volatility = 0.0
+            # 年化波动率
+            returns = np.diff(np.log(window_prices.values))
+            annual_volatility = float(np.std(returns) * np.sqrt(self.TRADING_DAYS)) if len(returns) >= 2 else 0.0
 
-            return {
-                "momentum": float(annual_return),
-                "r2": float(r2),
-                "annual_volatility": annual_volatility,
-                "valid": True,
-                "lookback_used": lookback,
-                "error": None
-            }
+            results.append({
+                'momentum': float(annual_return),
+                'r2': float(r2),
+                'annual_volatility': annual_volatility,
+                'valid': True,
+                'lookback_used': lookback,
+            })
 
-        except Exception as e:
-            self.logger.exception("加权回归动量计算发生错误")
-            return {
-                "momentum": 0.0,
-                "r2": 0.0,
-                "annual_volatility": 0.0,
-                "valid": False,
-                "lookback_used": lookback,
-                "error": str(e)
-            }
+        result_df = pd.DataFrame(results, index=prices.index)
+        return result_df
+
+    def _calculate_all_momenta(
+        self,
+        close: pd.Series,
+        high: pd.Series,
+        low: pd.Series,
+    ) -> pd.DataFrame:
+        """
+        向量化计算所有ETF的动量指标
+
+        Args:
+            close: 收盘价序列
+            high: 最高价序列
+            low: 最低价序列
+
+        Returns:
+            包含所有动量指标的 DataFrame
+        """
+        # 预初始化列
+        n = len(close)
+        result = pd.DataFrame(index=close.index)
+        result['momentum'] = 0.0
+        result['momentum_r2'] = 0.0
+        result['momentum_volatility'] = 0.0
+        result['momentum_valid'] = False
+        result['momentum_score'] = 0.0
+        result['dynamic_lookback'] = self.min_lookback_days
+
+        # 计算动态回溯期
+        if self.use_dynamic_lookback:
+            dynamic_lookbacks = []
+            for i in range(n):
+                if i < self.max_lookback_days + 10:
+                    dynamic_lookbacks.append(self.min_lookback_days)
+                else:
+                    lookback = self._calculate_dynamic_lookback(
+                        high.iloc[i - self.max_lookback_days:i + 1],
+                        low.iloc[i - self.max_lookback_days:i + 1],
+                        close.iloc[i - self.max_lookback_days:i + 1],
+                    )
+                    dynamic_lookbacks.append(lookback)
+            result['dynamic_lookback'] = dynamic_lookbacks
+        else:
+            result['dynamic_lookback'] = self.min_lookback_days
+
+        # 为每一天计算动量
+        for i in range(self.max_lookback_days, n):
+            lookback = int(result['dynamic_lookback'].iloc[i])
+            start_idx = i - lookback + 1
+
+            momentum_result = self._calculate_weighted_regression_vectorized(
+                close.iloc[start_idx:i + 1],
+                lookback,
+            )
+
+            if not momentum_result.empty:
+                last_result = momentum_result.iloc[-1]
+                result.iloc[i, result.columns.get_loc('momentum')] = last_result['momentum']
+                result.iloc[i, result.columns.get_loc('momentum_r2')] = last_result['r2']
+                result.iloc[i, result.columns.get_loc('momentum_volatility')] = last_result['annual_volatility']
+                result.iloc[i, result.columns.get_loc('momentum_valid')] = last_result['valid']
+
+                # 计算动量评分
+                momentum_dict = {
+                    'valid': last_result['valid'],
+                    'r2': last_result['r2'],
+                    'momentum': last_result['momentum'],
+                    'annual_volatility': last_result['annual_volatility'],
+                }
+                result.iloc[i, result.columns.get_loc('momentum_score')] = self._calculate_momentum_score(momentum_dict)
+
+        return result
 
     def _apply_risk_filters(self, prices: pd.Series) -> bool:
         """
@@ -513,16 +563,7 @@ class USETFJoinQuantRotationStrategy(FreqtradeStrategy, FreqtradeLifecycleMixin)
     # ============================================================================
 
     def populate_indicators(self, dataframe: pd.DataFrame, metadata: Optional[Dict] = None) -> pd.DataFrame:
-        """
-        计算技术指标
-
-        Args:
-            dataframe: K线数据
-            metadata: 元数据（包含 symbol）
-
-        Returns:
-            添加了指标的 DataFrame
-        """
+        """计算技术指标"""
         symbol = metadata.get("symbol", "unknown") if metadata else "unknown"
 
         # 初始化列
@@ -533,48 +574,32 @@ class USETFJoinQuantRotationStrategy(FreqtradeStrategy, FreqtradeLifecycleMixin)
         dataframe['momentum_score'] = 0.0
         dataframe['dynamic_lookback'] = self.min_lookback_days
 
-        # 使用滚动窗口计算动量
+        if len(dataframe) < self.max_lookback_days:
+            # 数据不足，添加均线后直接返回
+            dataframe['sma_20'] = sma(dataframe['close'], 20)
+            dataframe['sma_50'] = sma(dataframe['close'], 50)
+            dataframe['price_vs_sma20'] = dataframe['close'] / dataframe['sma_20'] - 1
+            dataframe['price_vs_sma50'] = dataframe['close'] / dataframe['sma_50'] - 1
+            return dataframe
+
+        # 向量化计算动量
         close_series = pd.Series(dataframe['close'].values, index=dataframe.index)
         high_series = pd.Series(dataframe['high'].values, index=dataframe.index)
         low_series = pd.Series(dataframe['low'].values, index=dataframe.index)
-        
-        # 为每一行计算滚动动量
-        for i in range(len(dataframe)):
-            if i < self.max_lookback_days:
-                continue
-                
-            # 获取滚动窗口数据
-            window_start = max(0, i - self.max_lookback_days)
-            window_prices = close_series.iloc[window_start:i+1]
-            window_high = high_series.iloc[window_start:i+1]
-            window_low = low_series.iloc[window_start:i+1]
-            
-            # 计算动态回溯期
-            if self.use_dynamic_lookback:
-                lookback = self._calculate_dynamic_lookback(
-                    window_high, window_low, window_prices
-                )
-            else:
-                lookback = self.min_lookback_days
-            
-            # 计算动量
-            momentum_result = self._calculate_weighted_regression_momentum(window_prices, lookback)
-            
-            # 填充结果
-            dataframe.at[dataframe.index[i], 'momentum'] = momentum_result['momentum']
-            dataframe.at[dataframe.index[i], 'momentum_r2'] = momentum_result['r2']
-            dataframe.at[dataframe.index[i], 'momentum_volatility'] = momentum_result['annual_volatility']
-            dataframe.at[dataframe.index[i], 'momentum_valid'] = 1 if momentum_result['valid'] else 0
-            dataframe.at[dataframe.index[i], 'dynamic_lookback'] = lookback
-            
-            # 计算动量评分
-            dataframe.at[dataframe.index[i], 'momentum_score'] = self._calculate_momentum_score(momentum_result)
+
+        momenta = self._calculate_all_momenta(close_series, high_series, low_series)
+
+        # 同步结果到 dataframe
+        for col in ['momentum', 'momentum_r2', 'momentum_volatility', 'momentum_score', 'dynamic_lookback']:
+            if col in momenta.columns:
+                dataframe[col] = momenta[col].values
+
+        dataframe['momentum_valid'] = momenta['momentum_valid'].astype(int).values
 
         # 添加均线用于参考
-        dataframe['sma_20'] = sma(close_series, 20)
-        dataframe['sma_50'] = sma(close_series, 50)
-
-        # 价格相对均线位置
+        close_col = pd.Series(dataframe["close"].values)
+        dataframe["sma_20"] = sma(close_col, 20)
+        dataframe["sma_50"] = sma(close_col, 50)
         dataframe['price_vs_sma20'] = dataframe['close'] / dataframe['sma_20'] - 1
         dataframe['price_vs_sma50'] = dataframe['close'] / dataframe['sma_50'] - 1
 
@@ -687,34 +712,17 @@ class USETFJoinQuantRotationStrategy(FreqtradeStrategy, FreqtradeLifecycleMixin)
                 return False
             window_prices = dataframe['close'].iloc[row_idx-self.decline_filter_days:row_idx+1]
             return not self._apply_risk_filters(window_prices)
-        
+
         risk_exit_mask = pd.Series([check_risk_exit(i) for i in range(len(dataframe))], index=dataframe.index)
         exit_condition = exit_condition | risk_exit_mask
 
-        # 处理布尔值情况 - 避免直接检查Series的布尔值
-        # 检查是否是pandas Series
-        if isinstance(exit_condition, pd.Series):
-            # 这是Series对象
-            dataframe.loc[exit_condition, 'exit_long'] = 1
-            dataframe.loc[exit_condition, 'exit_tag'] = "momentum_reversal_or_risk"
-        else:
-            # 这是标量布尔值
-            try:
-                # 尝试转换为布尔值
-                if bool(exit_condition):
-                    dataframe.loc[dataframe.index[-1], 'exit_long'] = 1
-                    dataframe.loc[dataframe.index[-1], 'exit_tag'] = "momentum_reversal_or_risk"
-            except (ValueError, TypeError):
-                # 如果转换失败，跳过
-                pass
+        # 直接应用 Series 条件（exit_condition 总是 Series）
+        dataframe.loc[exit_condition, 'exit_long'] = 1
+        dataframe.loc[exit_condition, 'exit_tag'] = "momentum_reversal_or_risk"
 
         # 记录信号统计
-        exit_long_sum = dataframe['exit_long'].sum()
-        if hasattr(exit_long_sum, '__len__'):
-            exit_count = int(exit_long_sum)
-        else:
-            exit_count = 1 if exit_long_sum else 0
-            
+        exit_count = int(dataframe['exit_long'].sum())
+
         if exit_count > 0:
             self.logger.info(
                 f"{metadata.get('symbol', 'unknown') if metadata else 'unknown'}: "

@@ -64,24 +64,37 @@ class Strategy(ABC):
 
     auto_register: bool = True
 
+    # 用于存储已注册的策略类（非实例）
+    _registered_strategy_classes: Dict[str, type] = {}
+
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
+        # 检查是否应该自动注册
         if not getattr(cls, "auto_register", True):
             return
+        # 跳过抽象类
         if inspect.isabstract(cls):
             return
-        registry = globals().get("strategy_registry")
-        if registry is None:
-            return
-        try:
-            instance = cls()
-        except TypeError as exc:
-            get_logger("strategy_registry").debug(
-                f"跳过自动注册 {cls.__name__}: {exc}"
-            )
-            return
-        if registry.get_strategy(instance.strategy_id) is None:
-            registry.register(instance)
+
+        # 获取 strategy_id
+        strategy_id = getattr(cls, "strategy_id", cls.__name__.lower())
+
+        # 注册到类级别的注册表
+        if strategy_id not in Strategy._registered_strategy_classes:
+            Strategy._registered_strategy_classes[strategy_id] = cls
+            get_logger("strategy_registry").debug(f"自动注册策略类: {strategy_id} ({cls.__name__})")
+
+            # 同时注册到全局注册表（创建实例）
+            registry = globals().get("strategy_registry")
+            if registry is not None:
+                try:
+                    # 尝试创建实例并注册
+                    instance = cls()
+                    if registry.get_strategy(strategy_id) is None:
+                        registry.register(instance)
+                except TypeError:
+                    # 抽象类无法实例化，跳过实例注册
+                    pass
     
     def __init__(self, config: Optional[StrategyConfig] = None):
         if config is None:

@@ -20,6 +20,7 @@ Freqtrade 风格的策略接口（IStrategy Protocol）
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
+import inspect
 import pandas as pd
 
 from src.core.types import Fill, OrderSide, OrderType
@@ -32,16 +33,50 @@ logger = get_logger("strategy.interface")
 class FreqtradeStrategy(ABC):
     """
     Freqtrade 风格策略基类
-    
+
     完整实现 Freqtrade 的策略生命周期回调
     """
-    
+
     # 策略配置（子类应覆盖）
     strategy_name: str = ""
     strategy_id: str = ""
     timeframe: str = "1d"
     startup_candle_count: int = 30
-    
+    auto_register: bool = True
+
+    # 用于存储已注册的策略类（非实例）
+    _registered_strategy_classes: Dict[str, type] = {}
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # 检查是否应该自动注册
+        if not getattr(cls, "auto_register", True):
+            return
+        # 跳过抽象类
+        if inspect.isabstract(cls):
+            return
+
+        # 获取 strategy_id
+        strategy_id = getattr(cls, "strategy_id", cls.__name__.lower())
+
+        # 注册到类级别的注册表
+        if strategy_id not in FreqtradeStrategy._registered_strategy_classes:
+            FreqtradeStrategy._registered_strategy_classes[strategy_id] = cls
+            get_logger("strategy_registry").debug(f"自动注册 Freqtrade 策略类: {strategy_id} ({cls.__name__})")
+
+        # 同时注册到全局注册表（创建实例）
+        from .strategy import strategy_registry
+        if strategy_id not in strategy_registry.list_strategies():
+            try:
+                # 尝试创建实例并注册
+                instance = cls()
+                if strategy_registry.get_strategy(strategy_id) is None:
+                    strategy_registry.register(instance)
+                    get_logger("strategy_registry").debug(f"自动注册 Freqtrade 策略实例: {strategy_id}")
+            except TypeError:
+                # 抽象类无法实例化，跳过
+                pass
+
     # ROI 配置（分钟: 目标收益率）
     minimal_roi: Dict[int, float] = {
         0: float('inf'),
