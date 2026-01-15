@@ -71,10 +71,10 @@ class StoplossManager:
         # ROI 检查（次优先级）
         if roi_table is not None:
             duration_minutes = int((current_time - entry_time).total_seconds() / 60)
-            
+
             # 找到最接近的 ROI 目标（Duration >= ROI threshold）
-            # 使用 reverse=True 从大到小查找
-            sorted_roi = sorted(roi_table.items(), reverse=True)
+            # 使用 reverse=True 从大到小查找，按整数键排序
+            sorted_roi = sorted(roi_table.items(), key=lambda x: int(x[0]), reverse=True)
             target_minutes = None
             target_profit = 0.0
             for minutes, profit in sorted_roi:

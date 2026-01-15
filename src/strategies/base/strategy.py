@@ -113,6 +113,7 @@ class Strategy(ABC):
         self._informative_data: Dict[str, pd.DataFrame] = {}
         self._informative_results: Dict[str, pd.DataFrame] = {}
         self.informative_timeframes: List[str] = []
+        self._vectorized_data: Dict[str, pd.DataFrame] = {}  # 存储向量化预计算后的数据
         
         # 自动收集参数
         self._parameters: Dict[str, Parameter] = {}

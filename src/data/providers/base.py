@@ -95,22 +95,19 @@ class HistoricalDataFeed(DataFeed):
         """初始化并加载历史数据"""
         self._symbols = symbols
         self._timeframe = timeframe
-        
+
         # 计算实际需要的日期范围（包含预热期）
         if end_date is None:
             end_date = datetime.now(timezone.utc)
         if start_date is None:
             # 默认回测1年
             start_date = end_date.replace(year=end_date.year - 1)
-        
-        # 预热期向前扩展
-        actual_start = start_date.replace(tzinfo=None)
-        for _ in range(self._warmup_days):
-            actual_start = actual_start.replace(day=1)  # 简化处理
-            actual_start = actual_start.replace(month=max(1, actual_start.month - 1))
-            if actual_start < start_date.replace(tzinfo=None):
-                break
-        
+
+        # 预热期向前扩展（使用 timedelta 简化计算）
+        from datetime import timedelta
+        warmup_delta = timedelta(days=self._warmup_days)
+        actual_start = start_date - warmup_delta
+
         # 加载所有标的的数据
         for symbol in symbols:
             try:

@@ -41,13 +41,19 @@ class StrategyConfigSchema(BaseModel):
     name: str = Field(..., description="策略类名")
     params: Dict[str, Any] = Field(default_factory=dict, description="针对策略的自定义参数")
 
+class TimeRangeConfig(BaseModel):
+    """回测时间范围配置"""
+    start: str = Field("", description="开始日期 YYYY-MM-DD")
+    end: str = Field("", description="结束日期 YYYY-MM-DD")
+
 class ConfigSchema(BaseModel):
     """全局配置架构"""
     trading: TradingConfig
     broker: BrokerConfig
-    risk: RiskConfig = Field(default_factory=RiskConfig)
+    risk: RiskConfig
     data: DataConfig
     strategy: StrategyConfigSchema
+    time_range: Optional[TimeRangeConfig] = Field(default=None, description="回测时间范围")
     
     @classmethod
     def from_yaml(cls, path: str):

@@ -9,10 +9,11 @@
 5. 交易信号标记（离场原因、持仓时间等）
 """
 
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 import math
+from decimal import Decimal
 
 import pandas as pd
 import numpy as np
@@ -123,7 +124,7 @@ class EnhancedBacktestReport:
             "initial_capital": self.initial_capital,
             "final_equity": self.final_equity,
             "total_return": self.total_return,
-            "total_return_pct": self.total_return_pct * 100,
+            "total_return_pct": self.total_return_pct * 100,  # 保持乘以100，因为BacktestResult期望百分比形式
             "annualized_return": self.annualized_return * 100,
             "monthly_returns": self.monthly_returns,
             "weekly_returns": self.weekly_returns,
@@ -200,8 +201,8 @@ class EnhancedReportGenerator:
         final_equity: float,
         equity_curve: List[Dict],
         trades: List[Dict],
-        signals: List[Dict] = None,
-        entry_signals: List[Dict] = None,
+        signals: Optional[List[Dict]] = None,
+        entry_signals: Optional[List[Dict]] = None,
     ) -> EnhancedBacktestReport:
         """
         生成增强回测报告
@@ -261,8 +262,8 @@ class EnhancedReportGenerator:
         profits = [t.get('pnl', 0) for t in trades if t.get('pnl', 0) > 0]
         losses = [t.get('pnl', 0) for t in trades if t.get('pnl', 0) < 0]
         
-        avg_win = np.mean(profits) if profits else 0
-        avg_loss = np.mean(losses) if losses else 0
+        avg_win = float(np.mean(profits)) if profits else 0.0
+        avg_loss = float(np.mean(losses)) if losses else 0.0
         profit_factor = abs(sum(profits) / sum(losses)) if sum(losses) != 0 else float('inf')
         
         expectancy = (win_rate * avg_win) - ((1 - win_rate) * abs(avg_loss))
@@ -274,7 +275,7 @@ class EnhancedReportGenerator:
         
         # 持仓时间分布
         durations = self._calculate_trade_durations(trades)
-        avg_trade_duration = np.mean(durations) if durations else 0
+        avg_trade_duration = float(np.mean(durations)) if durations else 0.0
         duration_distribution = self._categorize_durations(durations)
         
         # 效率指标
@@ -373,7 +374,7 @@ class EnhancedReportGenerator:
         monthly_returns = monthly.pct_change().dropna()
         
         return {
-            idx.strftime('%Y-%m'): float(ret)
+            idx.strftime('%Y-%m'): float(ret)  # type: ignore[union-attr]
             for idx, ret in monthly_returns.items()
         }
     
@@ -386,7 +387,7 @@ class EnhancedReportGenerator:
         weekly_returns = weekly.pct_change().dropna()
         
         return {
-            idx.strftime('%Y-W%U'): float(ret)
+            idx.strftime('%Y-W%U'): float(ret)  # type: ignore[union-attr]
             for idx, ret in weekly_returns.items()
         }
     
@@ -463,29 +464,32 @@ class EnhancedReportGenerator:
         
         return result
     
-    def _calculate_return_distribution(self, returns: List[float]) -> Dict[str, float]:
+    def _calculate_return_distribution(self, returns: Sequence[float]) -> Dict[str, float]:
         """计算收益分布（分位数）"""
         if not returns:
             return {}
         
-        returns = np.array(returns)
-        returns = returns[~np.isnan(returns) & ~np.isinf(returns)]
+        returns_arr = np.asarray(returns)
+        returns_arr = returns_arr[~np.isnan(returns_arr) & ~np.isinf(returns_arr)]
         
-        if len(returns) == 0:
+        if len(returns_arr) == 0:
             return {}
         
+        skew_val = float(pd.Series(returns_arr).skew())  # type: ignore[arg-type]
+        kurt_val = float(pd.Series(returns_arr).kurtosis())  # type: ignore[arg-type]
+        
         return {
-            'min': float(np.min(returns)),
-            'max': float(np.max(returns)),
-            'mean': float(np.mean(returns)),
-            'std': float(np.std(returns)),
-            'p5': float(np.percentile(returns, 5)),
-            'p25': float(np.percentile(returns, 25)),
-            'p50': float(np.percentile(returns, 50)),
-            'p75': float(np.percentile(returns, 75)),
-            'p95': float(np.percentile(returns, 95)),
-            'skewness': float(pd.Series(returns).skew()),
-            'kurtosis': float(pd.Series(returns).kurtosis()),
+            'min': float(np.min(returns_arr)),
+            'max': float(np.max(returns_arr)),
+            'mean': float(np.mean(returns_arr)),
+            'std': float(np.std(returns_arr)),
+            'p5': float(np.percentile(returns_arr, 5)),
+            'p25': float(np.percentile(returns_arr, 25)),
+            'p50': float(np.percentile(returns_arr, 50)),
+            'p75': float(np.percentile(returns_arr, 75)),
+            'p95': float(np.percentile(returns_arr, 95)),
+            'skewness': skew_val,
+            'kurtosis': kurt_val,
         }
     
     def _calculate_trade_durations(self, trades: List[Dict]) -> List[float]:
@@ -528,7 +532,7 @@ class EnhancedReportGenerator:
         total = len(durations)
         return {k: v / total for k, v in categories.items()}
     
-    def _calculate_returns(self, equity_values: List[float]) -> List[float]:
+    def _calculate_returns(self, equity_values: Sequence[float]) -> List[float]:
         """计算收益率序列"""
         if len(equity_values) < 2:
             return []
@@ -538,30 +542,30 @@ class EnhancedReportGenerator:
         returns = returns[~np.isnan(returns) & ~np.isinf(returns)]
         return returns.tolist()
     
-    def _calculate_sharpe(self, returns: List[float], risk_free_rate: float = 0.02) -> float:
+    def _calculate_sharpe(self, returns: Sequence[float], risk_free_rate: float = 0.02) -> float:
         """计算夏普比率"""
         if len(returns) < 2:
             return 0
         
-        returns = np.array(returns)
-        excess_returns = returns - risk_free_rate / 252
-        return float(np.mean(excess_returns) / np.std(excess_returns) * np.sqrt(252)) if np.std(returns) > 0 else 0
+        returns_arr = np.asarray(returns)
+        excess_returns = returns_arr - risk_free_rate / 252
+        return float(np.mean(excess_returns) / np.std(returns_arr) * np.sqrt(252)) if np.std(returns_arr) > 0 else 0
     
-    def _calculate_sortino(self, returns: List[float], risk_free_rate: float = 0.02) -> float:
+    def _calculate_sortino(self, returns: Sequence[float], risk_free_rate: float = 0.02) -> float:
         """计算 Sortino 比率"""
         if len(returns) < 2:
             return 0
         
-        returns = np.array(returns)
-        excess_returns = returns - risk_free_rate / 252
-        downside = returns[returns < 0]
+        returns_arr = np.asarray(returns)
+        excess_returns = returns_arr - risk_free_rate / 252
+        downside = returns_arr[returns_arr < 0]
         downside_std = np.std(downside) if len(downside) > 0 else 0.001
         return float(np.mean(excess_returns) / downside_std * np.sqrt(252)) if downside_std > 0 else 0
     
     def _analyze_signals(
         self,
-        signals: List[Dict],
-        entry_signals: List[Dict],
+        signals: Optional[List[Dict]],
+        entry_signals: Optional[List[Dict]],
         trades: List[Dict],
     ) -> SignalAnalysis:
         """分析信号"""
@@ -586,9 +590,9 @@ class EnhancedReportGenerator:
             
             if delays:
                 analysis.signals_with_entry = len(delays)
-                analysis.signal_to_entry_delay_days = np.mean(delays)
+                analysis.signal_to_entry_delay_days = float(np.mean(delays))
                 # 假设每天1根K线，转为bar数
-                analysis.signal_to_entry_delay_bars = analysis.signal_to_entry_delay_days
+                analysis.signal_to_entry_delay_bars = float(np.mean(delays))
         
         return analysis
     

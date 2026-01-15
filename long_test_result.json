@@ -1,0 +1,34 @@
+{
+  "initial_capital": 100000,
+  "final_equity": 236813.76837429465,
+  "total_return_pct": 136.81376837429465,
+  "calculated_return": 136.81376837429465,
+  "total_trades": 25,
+  "win_rate": 0.36,
+  "sharpe_ratio": 1.046907522824154,
+  "signals_count": 46,
+  "orders_count": 51,
+  "fills_count": 51,
+  "portfolio_daily_summary": {
+    "first_day": {
+      "timestamp": "2024-01-02 00:00:00+00:00",
+      "date": "2024-01-02",
+      "equity": 100000,
+      "cash": 100000
+    },
+    "last_day": {
+      "timestamp": "2024-12-31 00:00:00+00:00",
+      "date": "2024-12-31",
+      "equity": 236813.76837429465,
+      "cash": 216813.76837429465
+    },
+    "count": 252
+  },
+  "trades_by_symbol": {
+    "GLD": 13,
+    "QQQ": 16,
+    "TLT": 6,
+    "SPY": 6,
+    "IWM": 10
+  }
+}

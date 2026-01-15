@@ -220,10 +220,14 @@ export default function History() {
                         ? 'text-green-700 dark:text-green-400'
                         : 'text-red-700 dark:text-red-400'
                     }`}>
-                      {((backtest.total_return || 0) * 100).toFixed(2)}%
+                      {typeof backtest.total_return === 'number' && Number.isFinite(backtest.total_return)
+                        ? `${((backtest.total_return >= -1 ? backtest.total_return : 0) * 100).toFixed(2)}%`
+                        : 'N/A'}
                     </td>
                     <td className="px-5 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                      {backtest.sharpe_ratio?.toFixed(2) || 'N/A'}
+                      {typeof backtest.sharpe_ratio === 'number' && Number.isFinite(backtest.sharpe_ratio)
+                        ? backtest.sharpe_ratio.toFixed(2)
+                        : 'N/A'}
                     </td>
                     <td className="px-5 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
                       <button

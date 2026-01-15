@@ -16,7 +16,7 @@ ETF动量轮动策略
 - 完整的生命周期回调
 """
 
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -25,6 +25,10 @@ from src.strategies.base.freqtrade_interface import FreqtradeStrategy
 from src.strategies.base.lifecycle import FreqtradeLifecycleMixin
 from src.strategies.base.indicators import sma, ema
 from src.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from src.core.types import Signal, PortfolioState, RiskState, OrderIntent
+    from src.core.context import RunContext
 
 
 logger = get_logger("strategy.etf_momentum_joinquant")
@@ -76,12 +80,6 @@ class ETFMomentumJoinQuantStrategy(FreqtradeStrategy, FreqtradeLifecycleMixin):
     trailing_stop_positive_offset = 0.03
     trailing_only_offset_is_reached = False
 
-    # 追踪止损
-    trailing_stop = False
-    trailing_stop_positive = 0.02
-    trailing_stop_positive_offset = 0.03
-    trailing_only_offset_is_reached = False
-
     # 仓位配置
     position_adjustment_enable = False
     use_exit_signal = True
@@ -112,6 +110,7 @@ class ETFMomentumJoinQuantStrategy(FreqtradeStrategy, FreqtradeLifecycleMixin):
     target_positions: int = 1  # 目标持仓数量
     max_weight: float = 1.0  # 单标最大权重
     min_weight: float = 0.0  # 单标最小权重
+    use_compounding: bool = False  # 是否使用复利计算仓位大小
 
     # 常量
     WEIGHT_START: float = 1.0
@@ -373,18 +372,36 @@ class ETFMomentumJoinQuantStrategy(FreqtradeStrategy, FreqtradeLifecycleMixin):
         """
         symbol = metadata.get("symbol", "unknown") if metadata else "unknown"
 
-        # 计算加权动量
+        # 初始化列
+        dataframe['momentum'] = 0.0
+        dataframe['momentum_r2'] = 0.0
+        dataframe['momentum_volatility'] = 0.0
+        dataframe['momentum_valid'] = 0
+        dataframe['momentum_score'] = 0.0
+
+        # 使用滚动窗口计算动量
         close_series = pd.Series(dataframe['close'].values, index=dataframe.index)
-        momentum_result = self._calculate_weighted_momentum(close_series)
-
-        dataframe['momentum'] = momentum_result['momentum']
-        dataframe['momentum_r2'] = momentum_result['r2']
-        dataframe['momentum_volatility'] = momentum_result['annual_volatility']
-        dataframe['momentum_valid'] = 1 if momentum_result['valid'] else 0
-
-        # 计算动量评分
-        momentum_result['annual_volatility'] = momentum_result.get('annual_volatility', 0)
-        dataframe['momentum_score'] = self._calculate_momentum_score(momentum_result)
+        
+        # 为每一行计算滚动动量
+        for i in range(len(dataframe)):
+            if i < self.lookback_days:
+                continue
+                
+            # 获取滚动窗口数据
+            window_start = max(0, i - self.lookback_days)
+            window_prices = close_series.iloc[window_start:i+1]
+            
+            # 计算动量
+            momentum_result = self._calculate_weighted_momentum(window_prices)
+            
+            # 填充结果 - 使用.at[]来避免类型检查错误
+            dataframe.at[dataframe.index[i], 'momentum'] = momentum_result['momentum']
+            dataframe.at[dataframe.index[i], 'momentum_r2'] = momentum_result['r2']
+            dataframe.at[dataframe.index[i], 'momentum_volatility'] = momentum_result['annual_volatility']
+            dataframe.at[dataframe.index[i], 'momentum_valid'] = 1 if momentum_result['valid'] else 0
+            
+            # 计算动量评分
+            dataframe.at[dataframe.index[i], 'momentum_score'] = self._calculate_momentum_score(momentum_result)
 
         # 添加均线用于参考
         dataframe['sma_20'] = sma(close_series, 20)
@@ -394,11 +411,15 @@ class ETFMomentumJoinQuantStrategy(FreqtradeStrategy, FreqtradeLifecycleMixin):
         dataframe['price_vs_sma20'] = dataframe['close'] / dataframe['sma_20'] - 1
         dataframe['price_vs_sma50'] = dataframe['close'] / dataframe['sma_50'] - 1
 
-        self.logger.debug(
-            f"{symbol} indicators: momentum={momentum_result['momentum']:.4f}, "
-            f"r2={momentum_result['r2']:.4f}, "
-            f"score={dataframe['momentum_score'].iloc[-1]:.4f}"
-        )
+        # 记录最后一天的指标
+        if len(dataframe) > 0:
+            last_idx = len(dataframe) - 1
+            last_score = dataframe.iloc[last_idx]['momentum_score']
+            last_r2 = dataframe.iloc[last_idx]['momentum_r2']
+            self.logger.debug(
+                f"{symbol} indicators: momentum_score={last_score:.4f}, "
+                f"r2={last_r2:.4f}"
+            )
 
         return dataframe
 
@@ -420,47 +441,30 @@ class ETFMomentumJoinQuantStrategy(FreqtradeStrategy, FreqtradeLifecycleMixin):
         dataframe['enter_long'] = 0
         dataframe['enter_tag'] = ""
 
-        # 获取当前和前一根bar的评分
         if len(dataframe) < 2:
             return dataframe
 
-        current_score = dataframe['momentum_score'].iloc[-1]
-        prev_score = dataframe['momentum_score'].iloc[-2]
-        current_r2 = dataframe['momentum_r2'].iloc[-1]
-
-        # 进场条件：
-        # 1. 动量评分为正
-        # 2. R² 超过阈值
-        # 3. 动量由负转正或持续为正
+        # 计算动量评分变化
+        # 只有当动量评分从负变正时才生成进场信号
+        dataframe['momentum_score_prev'] = dataframe['momentum_score'].shift(1)
+        
+        # 条件：动量评分为正、R²超过阈值、且动量评分从负变正
         entry_condition = (
-            (current_score > 0) &
-            (current_r2 >= self.r2_threshold) &
-            (
-                # 动量由负转正
-                ((prev_score <= 0) & (current_score > 0)) |
-                # 或者动量持续为正且超过前期高点
-                ((prev_score > 0) & (current_score > prev_score * 0.9))
-            )
+            (dataframe['momentum_score'] > 0) &
+            (dataframe['momentum_r2'] >= self.r2_threshold) &
+            (dataframe['momentum_score_prev'] <= 0)
         )
+        
+        # 确保我们有足够的数据（至少lookback_days天）
+        if 'momentum_valid' in dataframe.columns:
+            entry_condition = entry_condition & (dataframe['momentum_valid'] == 1)
 
-        # 处理标量布尔值情况（避免 dataframe.loc[False, ...] 添加新行）
-        if isinstance(entry_condition, (bool, np.bool_)):
-            if entry_condition:
-                dataframe.loc[dataframe.index[-1], 'enter_long'] = 1
-                dataframe.loc[dataframe.index[-1], 'enter_tag'] = "momentum_crossover"
-        else:
-            dataframe.loc[entry_condition, 'enter_long'] = 1
-            dataframe.loc[entry_condition, 'enter_tag'] = "momentum_crossover"
-
-        # 额外的进场条件：动量最强
-        entry_sum = int(dataframe['enter_long'].sum()) if hasattr(dataframe['enter_long'].iloc[-1], '__iter__') else int(dataframe['enter_long'].sum())
-        if entry_sum == 0:
-            # 如果没有信号，选择动量评分最高的
-            pass
+        # 应用条件
+        dataframe.loc[entry_condition, 'enter_long'] = 1
+        dataframe.loc[entry_condition, 'enter_tag'] = "momentum_positive"
 
         # 记录信号统计
-        enter_sum_val = dataframe['enter_long'].sum()
-        enter_count = int(enter_sum_val) if not isinstance(enter_sum_val, (bool, np.bool_)) else (1 if enter_sum_val else 0)
+        enter_count = int(dataframe['enter_long'].sum())
         if enter_count > 0:
             self.logger.info(
                 f"{metadata.get('symbol', 'unknown') if metadata else 'unknown'}: "
@@ -681,6 +685,157 @@ class ETFMomentumJoinQuantStrategy(FreqtradeStrategy, FreqtradeLifecycleMixin):
     def botShutdown(self, **kwargs) -> None:
         """机器人关闭时调用"""
         self.logger.info(f"[BOT SHUTDOWN] {self.strategy_name}")
+
+    # ============================================================================
+    # v2 风格接口方法（仓位管理）
+    # ============================================================================
+
+    def size_positions(
+        self,
+        signals: List['Signal'],
+        portfolio: 'PortfolioState',
+        risk: 'RiskState',
+        ctx: 'RunContext',
+    ) -> List['OrderIntent']:
+        """
+        根据信号生成订单意图
+        
+        ETF动量策略的特殊处理：
+        1. 每次只持有一个ETF
+        2. 换仓时先平掉当前持仓，再买入新的ETF
+        3. 使用固定仓位大小（避免重复计算）
+        4. 只处理第一个有效的信号，避免重复计算
+        
+        Args:
+            signals: 信号列表
+            portfolio: 组合状态
+            risk: 风险状态
+            ctx: 运行上下文
+            
+        Returns:
+            订单意图列表
+        """
+        from src.core.types import OrderIntent, OrderSide, OrderType
+        from datetime import timezone
+        import uuid
+        
+        order_intents = []
+        
+        # 检查当前持仓
+        current_positions = {}
+        for symbol, qty in portfolio.positions.items():
+            if abs(qty) > 1e-8:  # 有持仓
+                current_positions[symbol] = qty
+
+        # ETF动量策略需要特殊处理换仓：
+        # 1. 先处理所有FLAT信号（卖出当前持仓）
+        # 2. 再处理LONG信号（买入新标的）
+        # 两者都需要生成订单，不能只处理一个就跳过
+
+        flat_signals = [s for s in signals if s.action.value == 'FLAT']
+        long_signals = [s for s in signals if s.action.value == 'LONG']
+
+        # 获取当前价格（复用价格获取逻辑）
+        def get_current_price(signal):
+            if signal.symbol in self._vectorized_data:
+                df = self._vectorized_data[signal.symbol]
+                if not df.empty:
+                    ts = signal.ts_utc
+                    if ts in df.index:
+                        try:
+                            row = df.loc[ts]
+                            if isinstance(row, pd.Series):
+                                return row.get('close')
+                            elif isinstance(row, pd.DataFrame):
+                                return row['close'].iloc[-1] if 'close' in row.columns else None
+                        except Exception as e:
+                            self.logger.warning(f"获取价格失败 {signal.symbol} @ {ts}: {e}")
+                    # 如果找不到，尝试获取最后有效价格
+                    close_col = df['close'] if 'close' in df.columns else None
+                    if close_col is not None:
+                        valid_prices = close_col.dropna()
+                        if not valid_prices.empty:
+                            return valid_prices.iloc[-1]
+            return None
+
+        # 处理所有FLAT信号（卖出当前持仓）
+        for signal in flat_signals:
+            current_price = get_current_price(signal)
+            if current_price is None or (isinstance(current_price, float) and pd.isna(current_price)):
+                self.logger.warning(f"无法获取 {signal.symbol} 的价格，跳过信号")
+                continue
+
+            if signal.symbol in current_positions:
+                qty = abs(current_positions[signal.symbol])
+                if qty > 0:
+                    order_intent = OrderIntent(
+                        order_id=str(uuid.uuid4())[:8],
+                        ts_utc=signal.ts_utc,
+                        symbol=signal.symbol,
+                        side=OrderSide.SELL,
+                        qty=qty,
+                        order_type=OrderType.MKT,
+                        limit_price=float(current_price),
+                        strategy_id=self.strategy_id,
+                        metadata=signal.metadata
+                    )
+                    order_intents.append(order_intent)
+                    self.logger.info(f"生成平仓订单: {signal.symbol} {qty:.4f} @ {current_price:.4f}")
+
+        # 只处理第一个有效的LONG信号（避免重复买入）
+        processed_long = False
+        for signal in long_signals:
+            if processed_long:
+                self.logger.debug(f"跳过重复的买入信号: {signal.symbol}")
+                continue
+
+            current_price = get_current_price(signal)
+            if current_price is None or (isinstance(current_price, float) and pd.isna(current_price)):
+                self.logger.warning(f"无法获取 {signal.symbol} 的价格，跳过信号")
+                continue
+
+            # 检查是否已经有持仓（需要换仓）
+            if current_positions:
+                # 如果已经有持仓，需要先平仓（已经在上面处理了FLAT信号）
+                for symbol, qty in current_positions.items():
+                    if abs(qty) > 1e-8:
+                        self.logger.info(f"换仓平仓: {symbol} {abs(qty):.4f} @ {current_price:.4f}")
+
+            # 使用当前总资产计算仓位大小
+            # 注意：portfolio.equity = portfolio.cash + positions_value
+            # 所以直接使用 equity 即可，不需要 cash + equity
+            total_equity = portfolio.equity
+
+            # 计算买入数量 - 使用总资产的固定比例
+            position_pct = 0.2  # 20%仓位
+            stake_amount = total_equity * position_pct
+            qty = stake_amount / current_price
+
+            self.logger.info(
+                f"仓位计算: 总资产=${total_equity:.2f}, "
+                f"仓位比例={position_pct:.1%}, "
+                f"买入金额=${stake_amount:.2f}, "
+                f"价格=${current_price:.4f}, "
+                f"数量={qty:.4f}"
+            )
+
+            # 生成买入订单
+            order_intent = OrderIntent(
+                order_id=str(uuid.uuid4())[:8],
+                ts_utc=signal.ts_utc,
+                symbol=signal.symbol,
+                side=OrderSide.BUY,
+                qty=qty,
+                order_type=OrderType.MKT,
+                limit_price=float(current_price),
+                strategy_id=self.strategy_id,
+                metadata=signal.metadata
+            )
+            order_intents.append(order_intent)
+            self.logger.info(f"生成买入订单: {signal.symbol} {qty:.4f} @ {current_price:.4f}")
+            processed_long = True  # 只处理第一个有效的LONG信号
+
+        return order_intents
 
     # ============================================================================
     # 实用方法

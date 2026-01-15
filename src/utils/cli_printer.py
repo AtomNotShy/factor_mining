@@ -120,19 +120,34 @@ class CLIPrinter:
 
         for fill in fills_sorted:
             # Handle both Fill objects (with enum side) and dicts (serialized)
-            side_raw = fill.side if isinstance(fill, dict) else getattr(fill, "side", None)
-            if isinstance(side_raw, dict):
-                side = side_raw.get("value", str(side_raw)).lower()
+            if isinstance(fill, dict):
+                side_raw = fill.get("side")
+                symbol = fill.get("symbol", "UNKNOWN")
+                qty = float(fill.get("qty", 0.0))
+                price = float(fill.get("price", 0.0))
+                ts = fill.get("ts_fill_utc", None)
+                if ts and isinstance(ts, pd.Timestamp):
+                    ts = ts.to_pydatetime()
+                metadata = fill.get("metadata", {}) or {}
             else:
-                side = getattr(side_raw, "value", str(side_raw)).lower()
-            symbol = getattr(fill, "symbol", "UNKNOWN")
-            qty = float(getattr(fill, "qty", 0.0))
-            price = float(getattr(fill, "price", 0.0))
-            ts = getattr(fill, "ts_fill_utc", None)
-            if ts and isinstance(ts, pd.Timestamp):
-                ts = ts.to_pydatetime()
+                side_raw = getattr(fill, "side", None)
+                symbol = getattr(fill, "symbol", "UNKNOWN")
+                qty = float(getattr(fill, "qty", 0.0))
+                price = float(getattr(fill, "price", 0.0))
+                ts = getattr(fill, "ts_fill_utc", None)
+                if ts and isinstance(ts, pd.Timestamp):
+                    ts = ts.to_pydatetime()
+                metadata = getattr(fill, "metadata", {}) or {}
             
-            metadata = getattr(fill, "metadata", {}) or {}
+            # Safely extract side value
+            if side_raw is None:
+                side = "unknown"
+            elif isinstance(side_raw, dict):
+                side = side_raw.get("value", str(side_raw)).lower()
+            elif hasattr(side_raw, 'value'):  # Enum
+                side = side_raw.value.lower()
+            else:
+                side = str(side_raw).lower()
             entry_tag = metadata.get("entry_tag") or "OTHER"
             exit_reason = metadata.get("exit_reason") or "OTHER"
 
@@ -257,25 +272,55 @@ class CLIPrinter:
         """
         Main entry point to print the full backtest report.
         Args:
-            summary: Processed summary from BacktestResultProcessor
+            summary: BacktestResult.to_dict() output
             engine_result: Raw result from BacktestEngine (contains fills)
         """
+        # 提取 BacktestResult 字段
+        strategy_name = summary.get("strategy_name", "unknown")
+        initial_capital = summary.get("initial_capital", 100000.0)
+        final_equity = summary.get("final_equity", 0.0)
+        total_return_pct = summary.get("total_return_pct", 0.0)
+        timerange = summary.get("timerange", "")
+        
+        # 性能指标
+        annual_return_pct = summary.get("annualized_return_pct", 0.0)  # 已转换的百分比
+        annual_volatility = summary.get("annual_volatility", summary.get("volatility", 0.0))
+        sharpe_ratio = summary.get("sharpe_ratio", 0.0)
+        sortino_ratio = summary.get("sortino_ratio", 0.0)
+        calmar_ratio = summary.get("calmar_ratio", 0.0)
+        max_drawdown_pct = summary.get("max_drawdown_pct", 0.0)
+        
+        # 交易统计
+        total_trades = summary.get("total_trades", 0)
+        win_rate_pct = summary.get("win_rate_pct", summary.get("win_rate", 0.0) * 100)
+        profit_factor = summary.get("profit_factor", 0.0)
+        
+        # 解析时间范围
+        if "~" in timerange:
+            parts = timerange.split("~")
+            start_date = parts[0].strip() if len(parts) > 0 else "N/A"
+            end_date = parts[1].strip() if len(parts) > 1 else "N/A"
+            # 计算天数
+            try:
+                from datetime import datetime
+                d1 = datetime.strptime(parts[0].strip(), "%Y-%m-%d").date()
+                d2 = datetime.strptime(parts[1].strip(), "%Y-%m-%d").date()
+                days = (d2 - d1).days
+            except:
+                days = "N/A"
+        else:
+            start_date = "N/A"
+            end_date = "N/A"
+            days = "N/A"
+        
         # 1. Backtest Summary
-        m = summary.get('enhanced_metrics', {})
-        results = summary.get('results', {})
-        config = summary.get('config', {})
-        backtest_period = summary.get('backtest_period', {})
-        
-        initial_capital = config.get('initial_capital', 100000.0)
-        
         summary_rows = [
-            ("Strategy", summary.get("strategy_name", "unknown")),
-            ("Universe", summary.get("symbol", "")),
-            ("Period", f"{backtest_period.get('start_date')} ~ {backtest_period.get('end_date')}"),
-            ("Duration", f"{backtest_period.get('days')} days"),
+            ("Strategy", strategy_name),
             ("Initial Capital", cls._fmt_currency(initial_capital)),
-            ("Final Equity", cls._fmt_currency(results.get("final_value"))),
-            ("Total Return", cls._fmt_pct(results.get("total_return"))),
+            ("Final Equity", cls._fmt_currency(final_equity)),
+            ("Total Return", cls._fmt_pct(total_return_pct / 100)),
+            ("Period", f"{start_date} ~ {end_date}"),
+            ("Duration", f"{days} days" if days != "N/A" else "N/A"),
             ("Signals", str(len(engine_result.get("signals", [])))),
             ("Orders", str(len(engine_result.get("orders", [])))),
             ("Fills", str(len(engine_result.get("fills", [])))),
@@ -284,19 +329,15 @@ class CLIPrinter:
 
         # 2. Performance Summary
         perf_rows = [
-            ("CAGR", cls._fmt_pct(m.get("annual_return"))), # Approximation if cagr not explicitly calc
-            ("Annual Return", cls._fmt_pct(m.get("annual_return"))),
-            ("Volatility", cls._fmt_pct(m.get("annual_volatility"))),
-            ("Sharpe Ratio", cls._fmt_num(m.get("sharpe_ratio"))),
-            ("Sortino Ratio", cls._fmt_num(m.get("sortino_ratio"))),
-            ("Calmar Ratio", cls._fmt_num(m.get("calmar_ratio"))),
-            ("Max Drawdown", cls._fmt_pct(m.get("max_drawdown"))),
-            ("Best Day", cls._fmt_pct(m.get("best_day"))),
-            ("Worst Day", cls._fmt_pct(m.get("worst_day"))),
-            ("Daily Win Rate", cls._fmt_pct(m.get("daily_win_rate"))),
-            ("Benchmark", summary.get("benchmark_data", {}).get("symbol", "N/A")),
-            ("Alpha", cls._fmt_num(m.get("alpha"))),
-            ("Beta", cls._fmt_num(m.get("beta"))),
+            ("Annual Return", cls._fmt_pct(annual_return_pct / 100)),
+            ("Volatility", cls._fmt_pct(annual_volatility)),
+            ("Sharpe Ratio", cls._fmt_num(sharpe_ratio)),
+            ("Sortino Ratio", cls._fmt_num(sortino_ratio)),
+            ("Calmar Ratio", cls._fmt_num(calmar_ratio)),
+            ("Max Drawdown", cls._fmt_pct(max_drawdown_pct)),
+            ("Total Trades", str(total_trades)),
+            ("Win Rate", cls._fmt_pct(win_rate_pct / 100 if win_rate_pct <= 1 else win_rate_pct / 100)),
+            ("Profit Factor", cls._fmt_num(profit_factor)),
         ]
         cls._print_table("PERFORMANCE SUMMARY", perf_rows)
 

@@ -31,84 +31,124 @@ export function DrawdownChart({
   useEffect(() => {
     if (!drawdownSeries || drawdownSeries.length === 0) return
 
-    const xValues = timestamps.map(formatTimestamp)
-    const yValues = drawdownSeries.map(v => (v * 100))
+    const chartRef = containerRef.current
+    if (!chartRef) return
 
-    const traces: any[] = [{
-      x: xValues,
-      y: yValues,
-      type: 'scatter',
-      fill: 'tozeroy',
-      mode: 'lines',
-      name: 'Drawdown',
-      line: { color: '#f44336', width: 1.5 },
-      fillcolor: 'rgba(244, 67, 54, 0.2)'
-    }]
+    import('echarts').then((echarts) => {
+      const chart = echarts.init(chartRef, isDark ? 'dark' : 'light')
 
-    const layout: any = {
-      title: {
-        text: 'Drawdown',
-        font: { size: 14, color: isDark ? '#E5E7EB' : '#333' }
-      },
-      height,
-      showlegend: false,
-      margin: { l: 50, r: 20, t: 40, b: 40 },
-      xaxis: {
-        title: '',
-        tickangle: -45,
-        tickfont: { size: 9, color: isDark ? '#9CA3AF' : '#666' },
-        gridcolor: isDark ? '#243041' : '#eee',
-        showgrid: true
-      },
-      yaxis: {
-        title: 'Drawdown (%)',
-        tickformat: '.1f',
-        tickfont: { size: 10, color: isDark ? '#E5E7EB' : '#333' },
-        gridcolor: isDark ? '#243041' : '#eee',
-        range: [Math.min(...yValues) * 1.1, 5]
-      },
-      plot_bgcolor: isDark ? '#0B1220' : '#fafafa',
-      paper_bgcolor: isDark ? '#111827' : 'white',
-      shapes: [] as any[]
-    }
+      const xAxisData = timestamps.map(formatTimestamp)
+      const yValues = drawdownSeries.map(v => (v * 100))
 
-    if (maxDrawdownWindow && maxDrawdownWindow.drawdown_pct < 0) {
-      const startIdx = timestamps.findIndex(ts => 
-        formatTimestamp(ts) === formatTimestamp(maxDrawdownWindow.start_date)
-      )
-      const endIdx = timestamps.findIndex(ts => 
-        formatTimestamp(ts) === formatTimestamp(maxDrawdownWindow.end_date)
-      )
-
-      if (startIdx >= 0 && endIdx >= 0) {
-        layout.shapes = [
-          {
-            type: 'rect',
-            xref: 'x',
-            yref: 'paper',
-            x0: xValues[startIdx],
-            x1: xValues[endIdx],
-            y0: 0,
-            y1: 1,
-            fillcolor: 'rgba(255, 0, 0, 0.08)',
-            line: { width: 0 }
+      const option: any = {
+        title: {
+          text: 'Drawdown',
+          left: 'left',
+          textStyle: {
+            fontSize: 14,
+            color: isDark ? '#E5E7EB' : '#333'
           }
-        ]
+        },
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'line' },
+          backgroundColor: isDark ? '#1f2937' : '#fff',
+          borderColor: isDark ? '#374151' : '#e5e7eb',
+          textStyle: { color: isDark ? '#e5e7eb' : '#333' },
+          formatter: (params: any) => {
+            const value = params[0]?.value?.toFixed(2) || '0.00'
+            return `${params[0]?.axisValue}<br/>Drawdown: <strong>${value}%</strong>`
+          }
+        },
+        grid: {
+          left: 50,
+          right: 20,
+          top: 40,
+          bottom: 40
+        },
+        xAxis: {
+          type: 'category',
+          data: xAxisData,
+          boundaryGap: false,
+          axisLabel: {
+            rotate: -45,
+            fontSize: 9,
+            color: isDark ? '#9CA3AF' : '#666'
+          },
+          axisLine: { lineStyle: { color: isDark ? '#374151' : '#e5e7eb' } }
+        },
+        yAxis: {
+          type: 'value',
+          name: 'Drawdown (%)',
+          axisLabel: {
+            formatter: (value: number) => `${value.toFixed(1)}%`,
+            fontSize: 10,
+            color: isDark ? '#E5E7EB' : '#333'
+          },
+          axisLine: { show: true, lineStyle: { color: isDark ? '#374151' : '#e5e7eb' } },
+          splitLine: { lineStyle: { color: isDark ? '#243041' : '#eee' } },
+          min: Math.min(...yValues) * 1.1,
+          max: 5
+        },
+        series: [
+          {
+            name: 'Drawdown',
+            type: 'line',
+            data: yValues,
+            smooth: true,
+            symbol: 'none',
+            areaStyle: {
+              color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                { offset: 0, color: 'rgba(244, 67, 54, 0.3)' },
+                { offset: 1, color: 'rgba(244, 67, 54, 0.05)' }
+              ])
+            },
+            lineStyle: { color: '#f44336', width: 1.5 },
+            itemStyle: { color: '#f44336' }
+          }
+        ],
+        animationDuration: 800
       }
-    }
 
-    if (typeof window !== 'undefined' && (window as any).Plotly) {
-      const Plotly = (window as any).Plotly
-      if (containerRef.current) {
-        Plotly.newPlot(containerRef.current, traces, layout, { responsive: true, displayModeBar: false })
+      // Mark max drawdown period if available
+      if (maxDrawdownWindow && maxDrawdownWindow.drawdown_pct < 0) {
+        const startIdx = timestamps.findIndex(ts => 
+          formatTimestamp(ts) === formatTimestamp(maxDrawdownWindow.start_date)
+        )
+        const endIdx = timestamps.findIndex(ts => 
+          formatTimestamp(ts) === formatTimestamp(maxDrawdownWindow.end_date)
+        )
+
+        if (startIdx >= 0 && endIdx >= 0) {
+          option.markArea = {
+            silent: true,
+            itemStyle: { color: 'rgba(255, 0, 0, 0.08)' },
+            data: [[
+              { xAxis: xAxisData[startIdx] },
+              { xAxis: xAxisData[endIdx] }
+            ]]
+          }
+        }
       }
-    }
+
+      chart.setOption(option, true)
+
+      const handleResize = () => chart.resize()
+      window.addEventListener('resize', handleResize)
+
+      return () => {
+        window.removeEventListener('resize', handleResize)
+        chart.dispose()
+      }
+    }).catch((err) => {
+      console.error('[DrawdownChart] Failed to load ECharts:', err)
+    })
 
   }, [drawdownSeries, timestamps, maxDrawdownWindow, isDark, height])
 
   if (!drawdownSeries || drawdownSeries.length === 0) {
     return (
-      <div className="flex items-center justify-center h-48 bg-gray-50 rounded-lg">
+      <div className="flex items-center justify-center h-48 bg-gray-50 dark:bg-gray-800 rounded-lg">
         <div className="text-gray-400">No drawdown data</div>
       </div>
     )
@@ -116,17 +156,7 @@ export function DrawdownChart({
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 p-4">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200">Drawdown</h3>
-        {maxDrawdownWindow && (
-          <div className="text-xs text-gray-500 dark:text-gray-400">
-            Max: {(maxDrawdownWindow.drawdown_pct * 100).toFixed(2)}% 
-            <span className="mx-2">|</span>
-            Duration: {maxDrawdownWindow.duration_days} days
-          </div>
-        )}
-      </div>
-      <div ref={containerRef} className="w-full" />
+      <div ref={containerRef} className="w-full" style={{ height }} />
     </div>
   )
 }

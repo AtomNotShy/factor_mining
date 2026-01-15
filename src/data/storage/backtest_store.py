@@ -123,13 +123,69 @@ class BacktestStore:
                 symbol_value = ",".join(universe)
 
             def safe_f(v):
-                if v is None: return None
+                if v is None: return 0.0
                 try:
                     import numpy as np
                     fv = float(v)
-                    if np.isnan(fv) or np.isinf(fv): return None
+                    if np.isnan(fv) or np.isinf(fv): return 0.0
+                    # 过滤掉不合理的超大值（超过 1 万亿）
+                    if abs(fv) > 1e12:
+                        return 0.0
                     return fv
-                except: return None
+                except: return 0.0
+
+            # 提取最终权益 - 数据在根级别，字段名是 final_equity
+            final_val = safe_f(
+                backtest_result.get('final_equity')  # 根级别
+                or backtest_result.get('final_value', 0)
+            )
+            
+            # 提取总回报 - 数据在根级别，字段名是 total_return_pct（小数形式）
+            # 兼容 total_return（小数）和 total_return_pct（百分比）
+            total_ret_raw = backtest_result.get('total_return') or backtest_result.get('total_return_pct', 0)
+            if total_ret_raw is not None:
+                total_ret = safe_f(total_ret_raw)
+                # 如果 total_return_pct 很大（如 88.6 表示 88.6%），需要转换为小数形式
+                if abs(total_ret) > 1 and abs(total_ret) <= 10000:
+                    total_ret = total_ret / 100.0
+            else:
+                total_ret = 0.0
+            
+            # 提取夏普比率 - 数据在根级别
+            sharpe_val = safe_f(
+                backtest_result.get('sharpe_ratio')
+                or backtest_result.get('sharpe', 0)
+            )
+            
+            # 提取最大回撤 - 数据在根级别
+            max_dd_val = safe_f(
+                backtest_result.get('max_drawdown')
+                or backtest_result.get('max_drawdown_pct', 0)
+            )
+            # 如果 max_drawdown_pct 是百分比形式，转换为小数
+            if max_dd_val > 1:
+                max_dd_val = max_dd_val / 100.0
+            
+            # 提取交易次数
+            total_trades_val = backtest_result.get('total_trades', 0)
+            
+            # 验证结果是否有效（只过滤掉明显无效的超大值）
+            if final_val > 1e12 or total_ret > 1e12:
+                self.logger.warning(
+                    f"跳过保存无效回测结果（值过大）: {backtest_id}, "
+                    f"final_value={final_val}, total_return={total_ret}"
+                )
+                return BacktestRecord(
+                    id=backtest_id,
+                    strategy_name=backtest_result.get('strategy_name', 'unknown'),
+                    symbol=symbol_value,
+                    timeframe=backtest_result.get('timeframe', ''),
+                    start_date=backtest_period.get('start_date', ''),
+                    end_date=backtest_period.get('end_date', ''),
+                    initial_capital=0,
+                    final_value=0.0,
+                    total_return=0.0,
+                )
 
             record = BacktestRecord(
                 id=backtest_id,
@@ -138,21 +194,13 @@ class BacktestStore:
                 timeframe=backtest_result.get('timeframe', ''),
                 start_date=backtest_period.get('start_date', ''),
                 end_date=backtest_period.get('end_date', ''),
-                initial_capital=backtest_result.get('config', {}).get('initial_capital', 0),
-                final_value=safe_f(results.get('final_value', performance.get('final_equity', 0))),
-                total_return=safe_f(results.get('total_return', performance.get('total_return', 0))),
-                sharpe_ratio=safe_f(
-                    perf_stats.get('sharpe_ratio')
-                    if perf_stats.get('sharpe_ratio') is not None
-                    else performance.get('sharpe_ratio', enhanced.get('sharpe_ratio'))
-                ),
-                max_drawdown=safe_f(
-                    perf_stats.get('max_drawdown')
-                    if perf_stats.get('max_drawdown') is not None
-                    else performance.get('max_drawdown', enhanced.get('max_drawdown'))
-                ),
-                total_trades=trade_stats_source.get('total_trades', 0),
-                win_rate=safe_f(win_rate)
+                initial_capital=safe_f(backtest_result.get('initial_capital', 0)),
+                final_value=final_val,
+                total_return=total_ret,
+                sharpe_ratio=sharpe_val,
+                max_drawdown=max_dd_val,
+                total_trades=total_trades_val,
+                win_rate=safe_f(backtest_result.get('win_rate', 0)),
             )
             
             # 保存完整结果
@@ -193,8 +241,10 @@ class BacktestStore:
         if symbol:
             records = [r for r in records if r.symbol == symbol]
         
-        # 按创建时间排序
-        records.sort(key=lambda x: x.created_at, reverse=True)
+        # 按创建时间排序（处理 None 值）
+        def get_created_at(x):
+            return x.created_at or ""
+        records.sort(key=get_created_at, reverse=True)
         
         return records[:limit]
     
@@ -251,3 +301,39 @@ class BacktestStore:
     def generate_id(self) -> str:
         """生成回测ID"""
         return str(uuid.uuid4())
+    
+    def cleanup_invalid_records(self) -> int:
+        """
+        清理无效的回测记录（final_value=0 或 total_return=0）
+        
+        Returns:
+            删除的记录数量
+        """
+        metadata = self._load_metadata()
+        invalid_ids = []
+        
+        for record_id, record in metadata.items():
+            # 检查是否是无记录
+            if (record.final_value == 0 and 
+                record.total_return == 0 and 
+                record.initial_capital == 0):
+                invalid_ids.append(record_id)
+        
+        # 删除无效记录
+        deleted_count = 0
+        for record_id in invalid_ids:
+            # 删除结果文件
+            result_file = self._get_result_file(record_id)
+            if result_file.exists():
+                result_file.unlink()
+            
+            # 从元数据中移除
+            del metadata[record_id]
+            deleted_count += 1
+            self.logger.info(f"删除无效回测记录: {record_id}")
+        
+        # 保存更新后的元数据
+        if deleted_count > 0:
+            self._save_metadata(metadata)
+        
+        return deleted_count

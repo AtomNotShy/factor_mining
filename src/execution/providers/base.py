@@ -41,6 +41,12 @@ class ExecutionProvider(ABC):
     - CCXTExecutionProvider：加密货币交易所（实盘用）
     """
 
+    # 同步兼容方法的默认属性（子类可覆盖）
+    _orders: Dict[str, OrderIntent] = {}
+    _fills: List[Fill] = []
+    _current_prices: Dict[str, float] = {}
+    config: ExecutionProviderConfig = field(default_factory=ExecutionProviderConfig)
+
     @abstractmethod
     async def initialize(self) -> None:
         """初始化执行器"""
@@ -67,7 +73,7 @@ class ExecutionProvider(ABC):
         pass
 
     @abstractmethod
-    async def get_portfolio_state(self) -> PortfolioState:
+    def get_portfolio_state(self) -> PortfolioState:
         """获取组合状态"""
         pass
 
@@ -117,8 +123,11 @@ class ExecutionProvider(ABC):
 
             self._fills.append(fill)
 
-            # 5. 更新组合状态
-            self._update_portfolio(fill)
+            # 5. 更新当前价格（用于后续计算最终权益）
+            self._current_prices[intent.symbol] = fill_price
+
+            # 6. 更新组合状态 - 调用子类的方法
+            self._update_portfolio_sync(fill)
 
             logger.info(
                 f"模拟成交: {order_id} {intent.symbol} {intent.side.value if hasattr(intent.side, 'value') else intent.side} "
@@ -139,12 +148,27 @@ class ExecutionProvider(ABC):
         if order.symbol in self._current_prices:
             return float(self._current_prices[order.symbol])
         
-        # 默认返回 100
-        return 100.0
+        # 没有价格数据时抛出异常，避免使用无意义的默认值
+        raise ValueError(
+            f"无法计算成交价格: 标的 {order.symbol} 没有可用价格数据。 "
+            f"请确保已正确设置市场数据。"
+        )
     
     def _calculate_slippage_sync(self, order: OrderIntent, fill_price: float) -> float:
-        """同步计算滑点"""
+        """同步计算滑点（默认实现）"""
         return fill_price * self.config.slippage_rate
+
+    def _calculate_commission(self, order: OrderIntent, fill_price: float) -> float:
+        """计算手续费（默认实现）"""
+        return order.qty * fill_price * self.config.commission_rate
+
+    def _update_portfolio(self, fill: Fill) -> None:
+        """更新组合状态（默认实现 - 空操作）"""
+        pass
+    
+    def _update_portfolio_sync(self, fill: Fill) -> None:
+        """同步更新组合状态（默认实现 - 空操作）"""
+        pass
 
     def get_open_orders(self, symbol: Optional[str] = None) -> List[OrderIntent]:
         """获取未成交订单（兼容接口）"""
@@ -153,15 +177,14 @@ class ExecutionProvider(ABC):
 
     def update_account_state(self, current_ts: datetime, current_prices: Dict[str, Any]) -> None:
         """更新账户状态（兼容接口）"""
-        # 简化实现：不执行任何操作
-        pass
+        # 更新当前价格
+        self._current_prices.update(current_prices)
 
     def on_tick(self, ts: datetime, bars: Dict[str, Any]) -> List[Fill]:
         """处理 tick 数据（兼容 SimulatedBroker 接口）- 返回已成交的订单"""
-        # 返回累积的 fills（订单已在 place_order 时成交）
+        # 返回累积的 fills，但不清空，因为 engine 会在 _context.all_fills 中保存副本
         fills = self._fills.copy()
-        # 清空已记录的 fills，避免重复
-        self._fills.clear()
+        # 不清空 self._fills，保留用于 get_fills() 等方法
         return fills
 
 
@@ -192,6 +215,7 @@ class SimulatedExecutionProvider(ExecutionProvider):
         )
         self._fills: List[Fill] = []
         self._orders: Dict[str, OrderIntent] = {}
+        self._current_prices: Dict[str, float] = {}  # 用于同步计算成交价格
         self._closed = False
         
         logger.info(
@@ -372,6 +396,10 @@ class SimulatedExecutionProvider(ExecutionProvider):
         # 更新权益
         self._update_equity()
     
+    def _update_portfolio_sync(self, fill: Fill) -> None:
+        """同步更新组合状态（与 _update_portfolio 相同）"""
+        self._update_portfolio(fill)
+    
     def _update_equity(self) -> None:
         """更新权益"""
         positions_value = sum(
@@ -443,10 +471,11 @@ class SimulatedExecutionProvider(ExecutionProvider):
             cash=self.config.initial_capital,
             positions={},
             avg_price={},
-            equity=0.0,  # equity = market value of positions, 0 at start
+            equity=self.config.initial_capital,  # 初始权益 = 初始资金
         )
         self._fills = []
         self._orders = {}
+        self._current_prices = {}
         logger.info("SimulatedExecutionProvider 已重置")
     
     async def close(self) -> None:
@@ -490,8 +519,5 @@ class ExecutionProviderFactory:
         if source == "ib":
             from src.execution.providers.ib import IBExecutionProvider
             return IBExecutionProvider(**kwargs)
-        elif source == "ccxt":
-            from src.execution.providers.ccxt import CCXTExecutionProvider
-            return CCXTExecutionProvider(**kwargs)
         else:
-            raise ValueError(f"未知的执行器: {source}")
+            raise ValueError(f"未知的执行器: {source}. 当前仅支持 'ib'")

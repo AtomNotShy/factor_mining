@@ -331,11 +331,19 @@ async def run_backtest(args):
     
     # 4. 确定回测参数
     end_date = date.today()
+    
+    # 优先使用命令行参数
     if args.end:
         end_date = datetime.strptime(args.end, "%Y-%m-%d").date()
+    # 回退到配置文件
+    elif config and config.time_range and config.time_range.end:
+        end_date = datetime.strptime(config.time_range.end, "%Y-%m-%d").date()
     
     if args.start:
         start_date = datetime.strptime(args.start, "%Y-%m-%d").date()
+    # 回退到配置文件
+    elif config and config.time_range and config.time_range.start:
+        start_date = datetime.strptime(config.time_range.start, "%Y-%m-%d").date()
     else:
         start_date = end_date - timedelta(days=args.days)
     
@@ -410,6 +418,8 @@ async def run_backtest(args):
     # 统一结果格式
     if hasattr(result, 'model_dump'):
         summary = result.model_dump()
+    elif hasattr(result, 'to_dict'):
+        summary = result.to_dict()
     elif isinstance(result, dict):
         summary = result
     else:

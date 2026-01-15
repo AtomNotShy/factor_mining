@@ -281,7 +281,7 @@ class EnhancedAnalyzer:
                 return None
             
             benchmark_returns = self.benchmark_analyzer.calculate_returns_from_prices(
-                benchmark_df['close']
+                pd.Series(benchmark_df['close'])
             )
             
             equity_curve = self.benchmark_analyzer.calculate_cumulative_equity(
@@ -409,20 +409,40 @@ class EnhancedAnalyzer:
             drawdown_analysis = self.drawdown_analyzer.comprehensive_drawdown_analysis(
                 portfolio_value, risk_free_rate
             )
-            
+
+            # 调试：检查drawdown_analysis
+            self.logger.debug(f"Drawdown analysis keys: {list(drawdown_analysis.keys()) if drawdown_analysis else 'None'}")
+            if drawdown_analysis and 'drawdown_series' in drawdown_analysis:
+                drawdown_series_val = drawdown_analysis['drawdown_series']
+                self.logger.debug(f"Drawdown series type: {type(drawdown_series_val)}")
+                self.logger.debug(f"Drawdown series length: {len(drawdown_series_val) if drawdown_series_val is not None else 'None'}")
+                if drawdown_series_val:
+                    self.logger.debug(f"Drawdown series first 3: {drawdown_series_val[:3]}")
+            else:
+                self.logger.debug("Drawdown analysis missing drawdown_series")
+
+            # 调试：检查最终结果
+            self.logger.debug(f"Final result will include drawdown_series: {'drawdown_series' in result}")
+            if 'drawdown_series' in result:
+                self.logger.debug(f"Result drawdown_series length: {len(result['drawdown_series']) if result['drawdown_series'] else 'Empty'}")
+
+            drawdown_series_val = drawdown_analysis.get('drawdown_series')
+
             result.update({
                 'ulcer_index': drawdown_analysis.get('ulcer_index'),
                 'burke_ratio': drawdown_analysis.get('burke_ratio'),
                 'time_in_market': drawdown_analysis.get('time_in_drawdown_pct'),
                 'max_drawdown_window': drawdown_analysis.get('max_drawdown_window'),
                 'drawdown_windows': drawdown_analysis.get('drawdown_windows', []),
-                'drawdown_series': drawdown_analysis.get('drawdown_series')
+                'drawdown_series': drawdown_series_val
             })
-            
+
             return result
             
         except Exception as e:
             self.logger.error(f"综合分析失败: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return {}
     
     def generate_equity_comparison(

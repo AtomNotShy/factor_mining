@@ -1,0 +1,41 @@
+{
+  "result": {
+    "initial_capital": 100000,
+    "final_equity": 99980.0,
+    "total_return_pct": -0.019999999999997797,
+    "total_trades": 1,
+    "signals_count": 1,
+    "orders_count": 1,
+    "fills_count": 1
+  },
+  "portfolio_daily_summary": {
+    "first_day": {
+      "timestamp": "2024-01-02 00:00:00+00:00",
+      "date": "2024-01-02",
+      "equity": 100000,
+      "cash": 100000
+    },
+    "last_day": {
+      "timestamp": "2024-01-31 00:00:00+00:00",
+      "date": "2024-01-31",
+      "equity": 99980.0,
+      "cash": 79980.0
+    },
+    "count": 21
+  },
+  "fills_sample": [
+    {
+      "fill_id": "9f458d32-ca1d-4793-af8d-298e978b37b9",
+      "order_id": "a1cfa127",
+      "ts_fill_utc": "2024-01-24 00:00:00+00:00",
+      "symbol": "QQQ",
+      "side": "BUY",
+      "qty": 46.96709954676749,
+      "price": 425.83,
+      "fee": 20.0,
+      "slippage_est": 0.212915,
+      "liquidity_flag": null,
+      "metadata": {}
+    }
+  ]
+}

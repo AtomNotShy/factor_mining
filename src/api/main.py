@@ -17,7 +17,9 @@ from .routers import strategy_backtest
 logger = get_logger(__name__)
 
 
-@uvicorn.run
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用程序生命周期管理"""
     logger.info("启动 Factor Mining System API")

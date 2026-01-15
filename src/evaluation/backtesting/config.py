@@ -147,6 +147,15 @@ class BacktestResult:
     orders: List[Dict[str, Any]] = field(default_factory=list)
     fills: List[Dict[str, Any]] = field(default_factory=list)
     portfolio_daily: List[Dict] = field(default_factory=list)
+    benchmark_symbol: str = ""
+    benchmark_return: float = 0.0
+    benchmark_volatility: float = 0.0
+    benchmark_equity: List[float] = field(default_factory=list)
+    drawdown_series: List[float] = field(default_factory=list)
+    alpha: float = 0.0
+    beta: float = 1.0
+    information_ratio: float = 0.0
+    r_squared: float = 0.0
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -157,13 +166,26 @@ class BacktestResult:
             "initial_capital": self.initial_capital,
             "final_equity": self.final_equity,
             "total_return_pct": round(self.total_return_pct, 4),
+            "volatility": round(self.volatility, 4),
+            "annual_volatility": round(self.volatility, 4),
             "annualized_return_pct": round(self.annualized_return * 100, 4),
-            "max_drawdown_pct": round(self.max_drawdown_pct * 100, 4),
+            "max_drawdown_pct": round(self.max_drawdown_pct, 4),
             "sharpe_ratio": round(self.sharpe_ratio, 4),
+            "sortino_ratio": round(self.sortino_ratio, 4),
+            "calmar_ratio": round(self.calmar_ratio, 4),
             "win_rate_pct": round(self.win_rate * 100, 4),
             "total_trades": self.total_trades,
             "winning_trades": self.winning_trades,
             "profit_factor": round(self.profit_factor, 4),
+            "benchmark_symbol": self.benchmark_symbol,
+            "benchmark_return": round(self.benchmark_return, 4),
+            "benchmark_volatility": round(self.benchmark_volatility, 4),
+            "benchmark_equity": self.benchmark_equity,
+            "drawdown_series": self.drawdown_series,
+            "alpha": round(self.alpha, 4),
+            "beta": round(self.beta, 4),
+            "information_ratio": round(self.information_ratio, 4),
+            "r_squared": round(self.r_squared, 4),
             "signals": self.signals,
             "orders": self.orders,
             "fills": self.fills,
