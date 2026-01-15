@@ -12,9 +12,15 @@ user_strategies/
 └── your_strategy.py                   # 你的新策略
 """
 
-from src.strategies.user_strategies.etf_momentum_joinquant import ETFMomentumJoinQuantStrategy
+
+
+# 导入注册表
+from src.strategies.simple_strategy import StrategyRegistry
+from src.strategies.user_strategies.us_etf_joinquant_rotation import USETFJoinQuantRotationStrategy
+
+# 注册策略
 
 
 __all__ = [
-    "ETFMomentumJoinQuantStrategy"
+    "USETFJoinQuantRotationStrategy",
 ]
