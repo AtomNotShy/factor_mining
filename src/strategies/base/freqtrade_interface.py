@@ -793,3 +793,66 @@ class StrategyLifecycleMixin:
     def botShutdown(self, **kwargs) -> None:
         """机器人关闭"""
         pass
+
+    # =========================================================================
+    # 组合选择接口 (用于跨资产轮动策略)
+    # =========================================================================
+
+    def get_portfolio_selection_signal(
+        self,
+        strategy_data: Dict[str, pd.DataFrame],
+        current_date: Any,
+        current_holding: Optional[str] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        跨资产组合选择接口
+
+        用于实现 ETF 轮动等需要跨资产选优的策略。
+
+        Args:
+            strategy_data: 所有标的历史算后的信号数据，key 是 symbol
+            current_date: 当前日期
+            current_holding: 当前持仓的 symbol（如果有）
+
+        Returns:
+            Dict[symbol, Dict[str, Any]]，每个 symbol 的信号修改
+            例如: {'SPY': {'action': 'KEEP'}, 'QQQ': {'action': 'FLAT'}}
+
+        支持的 action:
+            - 'LONG': 持有该标的
+            - 'FLAT': 平仓该标的
+            - 'KEEP': 保持当前状态
+        """
+        # 默认实现：选择 RAMOM 最高的标的
+        scores: Dict[str, float] = {}
+        for symbol, df in strategy_data.items():
+            if not df.empty:
+                # 尝试获取风险调整动量
+                ramom = df.get('ramom')
+                if ramom is not None and len(ramom) > 0:
+                    scores[symbol] = float(ramom.iloc[-1])
+                else:
+                    # 回退到 momentum_score
+                    momentum = df.get('momentum_score')
+                    if momentum is not None and len(momentum) > 0:
+                        scores[symbol] = float(momentum.iloc[-1])
+                    else:
+                        # 回退到 enter_long
+                        enter = df.get('enter_long')
+                        if enter is not None and len(enter) > 0:
+                            scores[symbol] = float(enter.iloc[-1])
+
+        if not scores:
+            return {}
+
+        # 选择得分最高的标的
+        best = max(scores, key=scores.get)
+
+        result: Dict[str, Dict[str, Any]] = {}
+        for symbol in strategy_data:
+            if symbol == best:
+                result[symbol] = {'action': 'LONG'}
+            else:
+                result[symbol] = {'action': 'FLAT'}
+
+        return result

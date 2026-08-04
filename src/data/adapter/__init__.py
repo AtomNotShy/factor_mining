@@ -32,6 +32,27 @@ class DataTimeoutError(Exception):
     pass
 
 
+def _timeframe_to_minutes(timeframe: str) -> int:
+    if len(timeframe) < 2:
+        raise DataValidationError(f"无效时间框架: {timeframe}")
+
+    unit = timeframe[-1]
+    value = timeframe[:-1]
+    if not value:
+        raise DataValidationError(f"无效时间框架: {timeframe}")
+
+    minutes = int(value)
+    if unit == "m":
+        return minutes
+    if unit == "h":
+        return minutes * 60
+    if unit == "d":
+        return minutes * 60 * 24
+    if unit == "w":
+        return minutes * 60 * 24 * 7
+    raise DataValidationError(f"未知时间框架: {timeframe}")
+
+
 @dataclass
 class DataRequest:
     """数据请求"""
@@ -119,12 +140,7 @@ class DataAdapter(ABC):
         # 1. 确定实际需要的起始时间（考虑warmup）
         start = request.start or datetime.min
         if request.include_previous > 0:
-            if request.timeframe.endswith("d"):
-                warmup_days = request.include_previous * 260
-                warmup_start = start - timedelta(days=warmup_days)
-            else:
-                warmup_minutes = request.include_previous * int(request.timeframe[:-1])
-                warmup_start = start - timedelta(minutes=warmup_minutes)
+            warmup_start = start - timedelta(days=request.include_previous)
         else:
             warmup_start = start
 
@@ -266,7 +282,7 @@ class HistoricalDataAdapter(DataAdapter):
     def _validate_time_continuity(self, data: pd.DataFrame, timeframe: str):
         """验证时间连续性（日线数据跳过严格检查）"""
         # 日线数据不进行严格连续性检查，因为周末和节假日会有间隔
-        if timeframe.endswith("d"):
+        if timeframe.endswith("d") or timeframe.endswith("w"):
             return
         
         if len(data) < 2:
@@ -274,7 +290,7 @@ class HistoricalDataAdapter(DataAdapter):
 
         time_diffs = data.index.to_series().diff().dropna()
 
-        expected_minutes = int(timeframe[:-2])
+        expected_minutes = _timeframe_to_minutes(timeframe)
         expected_seconds = expected_minutes * 60
         tolerance = expected_seconds * 0.1
 
@@ -284,6 +300,14 @@ class HistoricalDataAdapter(DataAdapter):
         )
         
         for diff_seconds in diff_seconds_list:
+            # 允许跨交易日的长间隔
+            if diff_seconds > expected_seconds * 5:
+                continue
+
+            ratio = diff_seconds / expected_seconds if expected_seconds > 0 else 0
+            if abs(ratio - round(ratio)) < 0.01:
+                continue
+
             if abs(diff_seconds - expected_seconds) > tolerance:
                 raise DataValidationError(
                     f"时间连续性错误: 期望间隔{expected_seconds}秒, 实际间隔{diff_seconds}秒"

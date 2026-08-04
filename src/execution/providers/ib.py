@@ -96,7 +96,8 @@ class IBExecutionProvider(ExecutionProvider):
         self._closed = False
         self._reconnect_task: Optional[asyncio.Task] = None
         self._monitor_task: Optional[asyncio.Task] = None
-        
+        self._current_prices: Dict[str, float] = {}  # 当前价格
+
         # IB合约缓存
         self._contracts: Dict[str, Contract] = {}
         
@@ -762,13 +763,18 @@ class IBExecutionProvider(ExecutionProvider):
         self._update_equity()
     
     def _update_equity(self) -> None:
-        """更新权益"""
+        """使用当前市价计算权益"""
         positions_value = sum(
-            abs(qty) * self._portfolio.avg_price.get(symbol, 0.0)
+            qty * self._current_prices.get(symbol, self._portfolio.avg_price.get(symbol, 0.0))
             for symbol, qty in self._portfolio.positions.items()
             if abs(qty) > 1e-8
         )
         self._portfolio.equity = self._portfolio.cash + positions_value
+
+    def update_current_prices(self, prices: Dict[str, float]) -> None:
+        """更新价格缓存并重新计算权益"""
+        self._current_prices.update(prices)
+        self._update_equity()
 
 
 class IBProviderFactory:

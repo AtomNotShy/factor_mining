@@ -10,7 +10,7 @@ import pandas as pd
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Type
 from src.evaluation.optimization.optimizer_base import OptimizerBase, OptimizationResult
-from src.evaluation.backtesting.unified_engine import UnifiedBacktestEngine, UnifiedConfig, FeatureFlag
+from src.evaluation.backtesting.engine import UnifiedBacktestEngine, UnifiedConfig, FeatureFlag
 from src.evaluation.backtesting.config import TradeConfig, TimeConfig
 from src.data.loader import HistoryLoader
 from src.core.context import RunContext, Environment

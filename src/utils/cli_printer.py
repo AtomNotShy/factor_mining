@@ -188,6 +188,7 @@ class CLIPrinter:
                     "pnl": pnl,
                     "ret_pct": ret_pct,
                     "duration": duration,
+                    "ts": entry_ts,  # 入场时间
                     "entry_tag": lot.get("entry_tag") or "OTHER",
                     "exit_reason": exit_reason,
                     "exit_ts": ts

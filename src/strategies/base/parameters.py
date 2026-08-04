@@ -241,3 +241,154 @@ def create_boolean_parameter(
 ) -> BooleanParameter:
     """创建布尔参数的工厂函数"""
     return BooleanParameter(name=name, default=default, space=space)
+
+
+def time_to_decimal(hour: int, minute: int) -> float:
+    """将时间转换为小数格式
+
+    用于方便的时间比较和数值计算。
+
+    Args:
+        hour: 小时 (0-23)
+        minute: 分钟 (0-59)
+
+    Returns:
+        小数时间，如 9:50 -> 9.83
+
+    Examples:
+        >>> time_to_decimal(9, 30)
+        9.5
+        >>> time_to_decimal(9, 50)
+        9.83
+        >>> time_to_decimal(14, 30)
+        14.5
+    """
+    return hour + minute / 60
+
+
+def decimal_to_time(decimal_time: float) -> tuple[int, int]:
+    """将小数时间转换为 (hour, minute)
+
+    Args:
+        decimal_time: 小数时间，如 9.83
+
+    Returns:
+        (小时, 分钟) 元组
+
+    Examples:
+        >>> decimal_to_time(9.5)
+        (9, 30)
+        >>> decimal_to_time(9.83)
+        (9, 49)  # 注意：9.83 是近似值，实际是 49.xx 分钟
+    """
+    hour = int(decimal_time)
+    minute = int(round((decimal_time - hour) * 60))
+    # 处理四舍五入导致的 60 分钟情况
+    if minute == 60:
+        hour += 1
+        minute = 0
+    return hour, minute
+
+
+def create_time_parameter(
+    name: str,
+    min_hour: int,
+    min_minute: int,
+    max_hour: int,
+    max_minute: int,
+    default_hour: int,
+    default_minute: int,
+    space: str = "buy",
+) -> DecimalParameter:
+    """创建时间参数（小数格式）的工厂函数
+
+    Args:
+        name: 参数名
+        min_hour, min_minute: 最小时间
+        max_hour, max_minute: 最大时间
+        default_hour, default_minute: 默认时间
+        space: 参数空间 (buy/sell/protect)
+
+    Returns:
+        DecimalParameter，可直接用 .value 获取小数时间
+
+    Examples:
+        # 创建 9:30 - 16:00 范围的时间参数，默认 9:50
+        time_param = create_time_parameter(
+            name="intraday_time",
+            min_hour=9, min_minute=30,
+            max_hour=16, max_minute=0,
+            default_hour=9, default_minute=50,
+        )
+        if current_time > time_param.value:  # 直接比较
+            ...
+    """
+    return DecimalParameter(
+        name=name,
+        min_val=time_to_decimal(min_hour, min_minute),
+        max_val=time_to_decimal(max_hour, max_minute),
+        default=time_to_decimal(default_hour, default_minute),
+        space=space,
+    )
+
+
+def parse_time(time_str: str) -> float:
+    """解析字符串时间为小数格式
+
+    Args:
+        time_str: 时间字符串，支持 "9:50", "9:5", "14:30", "16:00" 等格式
+
+    Returns:
+        小数时间，如 9:50 -> 9.83
+
+    Examples:
+        >>> parse_time("9:50")
+        9.83
+        >>> parse_time("14:30")
+        14.5
+        >>> parse_time("16:00")
+        16.0
+    """
+    parts = time_str.split(":")
+    hour = int(parts[0])
+    minute = int(parts[1]) if len(parts) > 1 else 0
+    return time_to_decimal(hour, minute)
+
+
+def create_time_parameter_str(
+    name: str,
+    start_time: str,
+    end_time: str,
+    default_time: str,
+    space: str = "buy",
+) -> DecimalParameter:
+    """创建时间参数（小数格式）的工厂函数 - 字符串版本
+
+    Args:
+        name: 参数名
+        start_time: 最小时间，如 "9:30"
+        end_time: 最大时间，如 "16:00"
+        default_time: 默认时间，如 "9:50"
+        space: 参数空间 (buy/sell/protect)
+
+    Returns:
+        DecimalParameter，可直接用 .value 获取小数时间
+
+    Examples:
+        # 创建 9:30 - 16:00 范围的时间参数，默认 9:50
+        time_param = create_time_parameter_str(
+            name="intraday_time",
+            start_time="9:30",
+            end_time="16:00",
+            default_time="9:50",
+        )
+        if current_time > time_param.value:  # 直接比较，值为 9.83
+            ...
+    """
+    return DecimalParameter(
+        name=name,
+        min_val=parse_time(start_time),
+        max_val=parse_time(end_time),
+        default=parse_time(default_time),
+        space=space,
+    )

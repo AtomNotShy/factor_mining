@@ -5,6 +5,8 @@
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, cast
 
 import numpy as np
@@ -85,11 +87,11 @@ class BenchmarkAnalyzer:
                     return None
                 except RuntimeError:
                     pass
-                from datetime import datetime, timezone as dt_timezone
+
                 from src.data.collectors.ib_history import IBHistoryCollector
                 collector = IBHistoryCollector()
-                start_dt = datetime.fromisoformat(start_date).replace(tzinfo=dt_timezone.utc)
-                end_dt = datetime.fromisoformat(end_date).replace(tzinfo=dt_timezone.utc)
+                start_dt = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+                end_dt = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
                 df = collector.get_ohlcv(
                     symbol=self.benchmark_symbol,
                     timeframe="1d",
@@ -99,70 +101,51 @@ class BenchmarkAnalyzer:
                 )
             else:
                 from src.config.settings import get_settings
-                import os
-                safe_symbol = self.benchmark_symbol.upper().replace("/", "_")
-                data_dir = get_settings().storage.data_dir
-                
-                # 先尝试 Polygon 路径
-                polygon_path = os.path.join(data_dir, "polygon/ohlcv/adjusted/utc/1d", f"{safe_symbol}.parquet")
-                ib_path = os.path.join(data_dir, "ib/ohlcv/1d", f"{safe_symbol}.parquet")
-                
-                cache_path = polygon_path
-                if os.path.exists(polygon_path):
-                    df = pd.read_parquet(polygon_path)
-                    if "datetime" in df.columns:
-                        df["datetime"] = pd.to_datetime(df["datetime"])
-                        df = df.set_index("datetime")
-                    if not df.empty:
-                        # 确保索引是 DatetimeIndex
-                        if not isinstance(df.index, pd.DatetimeIndex):
-                            df.index = pd.to_datetime(df.index)
-                        
-                        # 强制统一时区为 UTC 以便对齐
-                        dt_idx = cast(DatetimeIndex, df.index)
-                        if dt_idx.tz is None:
-                            df.index = dt_idx.tz_localize("UTC")
-                        else:
-                            df.index = dt_idx.tz_convert("UTC")
+                from src.data.storage.local_bars import load_local_ohlcv
 
-                        # 处理时区对齐后的过滤
-                        start_ts = pd.Timestamp(start_date)
-                        end_ts = pd.Timestamp(end_date)
-                        if start_ts.tz is None:
-                            start_ts = start_ts.tz_localize("UTC")
-                        else:
-                            start_ts = start_ts.tz_convert("UTC")
-                        if end_ts.tz is None:
-                            end_ts = end_ts.tz_localize("UTC")
-                        else:
-                            end_ts = end_ts.tz_convert("UTC")
-                        
-                        df = df[(df.index >= start_ts) & (df.index <= end_ts)]
-                
-                # 如果 Polygon 数据不足，尝试 IB 路径
-                if df is None or len(df) == 0:
-                    if os.path.exists(ib_path):
-                        cache_path = ib_path
-                        df = pd.read_parquet(ib_path)
+                settings = get_settings()
+                data_dir = settings.storage.data_dir
+
+                # 使用统一的本地数据加载函数（支持所有路径）
+                start_dt = datetime.fromisoformat(start_date)
+                end_dt = datetime.fromisoformat(end_date)
+
+                df, source = load_local_ohlcv(
+                    data_dir=data_dir,
+                    symbol=self.benchmark_symbol,
+                    timeframe="1d",
+                    start=start_dt,
+                    end=end_dt,
+                )
+
+                # 如果统一加载失败，尝试直接检查可能的路径
+                if df.empty:
+                    self.logger.debug(f"load_local_ohlcv 未找到 {self.benchmark_symbol}，尝试直接路径...")
+
+                    # 检查新统一路径
+                    safe_symbol = self.benchmark_symbol.upper().replace("/", "_")
+                    unified_path = Path(data_dir) / "bars" / safe_symbol / "1d" / "data.parquet"
+                    if unified_path.exists():
+                        df = pd.read_parquet(unified_path)
                         if "datetime" in df.columns:
                             df["datetime"] = pd.to_datetime(df["datetime"])
                             df = df.set_index("datetime")
-                        if not df.empty:
-                            # 确保索引是 DatetimeIndex
-                            if not isinstance(df.index, pd.DatetimeIndex):
-                                df.index = pd.to_datetime(df.index)
-                            
-                            # 强制统一时区为 UTC 以便对齐
-                            dt_idx = cast(DatetimeIndex, df.index)
-                            if dt_idx.tz is None:
-                                df.index = dt_idx.tz_localize("UTC")
-                            else:
-                                df.index = dt_idx.tz_convert("UTC")
-
-                            # 处理时区对齐后的过滤
-                            df = df[(df.index >= start_ts) & (df.index <= end_ts)]
+                        self.logger.info(f"从统一路径加载基准数据: {unified_path}")
 
             if df is not None and len(df) > 0:
+                # 确保索引是 DatetimeIndex
+                if not isinstance(df.index, pd.DatetimeIndex):
+                    if "datetime" in df.columns:
+                        df = df.set_index("datetime")
+                    df.index = pd.to_datetime(df.index)
+
+                # 统一时区为 UTC
+                dt_idx = cast(DatetimeIndex, df.index)
+                if dt_idx.tz is None:
+                    df.index = dt_idx.tz_localize("UTC")
+                else:
+                    df.index = dt_idx.tz_convert("UTC")
+
                 self._benchmark_cache[cache_key] = df
                 return df
 

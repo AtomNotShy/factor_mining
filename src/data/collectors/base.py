@@ -22,6 +22,9 @@ class Logger:
     
     def warning(self, message: str):
         print(f"WARNING [{self.name}]: {message}")
+    
+    def debug(self, message: str):
+        print(f"DEBUG [{self.name}]: {message}")
 
 
 class BaseDataCollector(ABC):

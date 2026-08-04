@@ -5,7 +5,7 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import AsyncIterator, Dict, List, Optional, Any
+from typing import AsyncIterator, Dict, List, Optional, Any, Union
 import asyncio
 import pandas as pd
 
@@ -49,7 +49,28 @@ class DataFeed(ABC):
     async def get_current_bar(self, symbol: str) -> Dict[str, Any]:
         """获取当前K线数据（用于计算成交价）"""
         pass
-    
+
+    @abstractmethod
+    async def get_bars_multi_timeframe(
+        self,
+        symbol: str,
+        timeframes: List[str],
+        start: datetime,
+        end: datetime,
+    ) -> Dict[str, pd.DataFrame]:
+        """获取多个时间框架的K线数据
+
+        Args:
+            symbol: 交易标的
+            timeframes: 时间框架列表，如 ["1d", "1m"]
+            start: 开始时间
+            end: 结束时间
+
+        Returns:
+            {timeframe: DataFrame} 的字典
+        """
+        pass
+
     @abstractmethod
     async def close(self) -> None:
         """关闭数据源"""
@@ -59,13 +80,13 @@ class DataFeed(ABC):
 class HistoricalDataFeed(DataFeed):
     """
     历史回放数据源（用于回测）
-    
+
     特点：
     - 按时间轴逐条发布 MarketEvent
     - 支持多时间框架
     - 可预加载所有历史数据
     """
-    
+
     def __init__(
         self,
         initial_capital: float = 100000.0,
@@ -73,18 +94,20 @@ class HistoricalDataFeed(DataFeed):
     ):
         self._symbols: List[str] = []
         self._timeframe: str = "1d"
-        self._bars_map: Dict[str, pd.DataFrame] = {}
+        self._timeframes: List[str] = []  # 支持多时间框架
+        self._bars_map: Dict[str, pd.DataFrame] = {}  # {symbol: DataFrame} - 主时间框架
+        self._bars_map_by_timeframe: Dict[str, Dict[str, pd.DataFrame]] = {}  # {timeframe: {symbol: DataFrame}}
         self._current_idx: int = 0
         self._timeline: pd.DatetimeIndex = pd.DatetimeIndex([])
         self._warmup_days = warmup_days
         self._closed = False
-        
+
         # 从数据适配器获取数据
         from src.data.adapter.factory import adapter_factory
         self._adapter = adapter_factory.create_historical_adapter()
-        
+
         logger.info(f"HistoricalDataFeed 初始化完成 (warmup_days={warmup_days})")
-    
+
     async def initialize(
         self,
         symbols: List[str],
@@ -92,9 +115,32 @@ class HistoricalDataFeed(DataFeed):
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
     ) -> None:
-        """初始化并加载历史数据"""
+        """初始化并加载历史数据（单时间框架）"""
+        await self.initialize_multi(
+            symbols=symbols,
+            timeframes=[timeframe],
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    async def initialize_multi(
+        self,
+        symbols: List[str],
+        timeframes: List[str],
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+    ) -> None:
+        """初始化并加载多时间框架历史数据
+
+        Args:
+            symbols: 交易标的列表
+            timeframes: 时间框架列表，如 ["1d", "1m"]
+            start_date: 开始日期
+            end_date: 结束日期
+        """
         self._symbols = symbols
-        self._timeframe = timeframe
+        self._timeframes = timeframes
+        self._timeframe = timeframes[0] if timeframes else "1d"
 
         # 计算实际需要的日期范围（包含预热期）
         if end_date is None:
@@ -103,39 +149,46 @@ class HistoricalDataFeed(DataFeed):
             # 默认回测1年
             start_date = end_date.replace(year=end_date.year - 1)
 
-        # 预热期向前扩展（使用 timedelta 简化计算）
+        # 预热期向前扩展
         from datetime import timedelta
         warmup_delta = timedelta(days=self._warmup_days)
         actual_start = start_date - warmup_delta
 
-        # 加载所有标的的数据
+        # 初始化多时间框架存储
+        self._bars_map_by_timeframe = {tf: {} for tf in timeframes}
+
+        # 加载所有标的的所有时间框架数据
         for symbol in symbols:
-            try:
-                data = await self._adapter.get_data(
-                    symbol=symbol,
-                    start=actual_start,
-                    end=end_date,
-                    timeframe=timeframe,
-                )
-                
-                if not data.empty:
-                    if 'symbol' not in data.columns:
-                        data['symbol'] = symbol
-                    data = data.sort_index()
-                    self._bars_map[symbol] = data
-                    logger.info(f"加载 {symbol} {timeframe}: {len(data)} bars")
-                else:
-                    logger.warning(f"没有找到 {symbol} 的数据")
-                    
-            except Exception as e:
-                logger.error(f"加载 {symbol} 数据失败: {e}")
-        
-        # 生成统一的时间轴（所有标的的交集）
+            for tf in timeframes:
+                try:
+                    data = await self._adapter.get_data(
+                        symbol=symbol,
+                        start=actual_start,
+                        end=end_date,
+                        timeframe=tf,
+                    )
+
+                    if not data.empty:
+                        if 'symbol' not in data.columns:
+                            data['symbol'] = symbol
+                        data = data.sort_index()
+                        self._bars_map_by_timeframe[tf][symbol] = data
+                        logger.info(f"加载 {symbol} {tf}: {len(data)} bars")
+                    else:
+                        logger.warning(f"没有找到 {symbol} {tf} 的数据")
+
+                except Exception as e:
+                    logger.error(f"加载 {symbol} {tf} 数据失败: {e}")
+
+        # 主时间框架的数据映射
+        self._bars_map = self._bars_map_by_timeframe.get(self._timeframe, {})
+
+        # 生成统一的时间轴（使用主时间框架）
         self._timeline = self._generate_timeline()
-        
+
         logger.info(
             f"HistoricalDataFeed 初始化完成: "
-            f"{len(self._symbols)} 标的, {len(self._timeline)} 时间点"
+            f"{len(self._symbols)} 标的, {timeframes} 时间框架, {len(self._timeline)} 时间点"
         )
     
     def _generate_timeline(self) -> pd.DatetimeIndex:
@@ -282,11 +335,60 @@ class HistoricalDataFeed(DataFeed):
             'volume': float(row.get('volume', 0)),
             'timestamp': current_bars.index[0].to_pydatetime() if hasattr(current_bars.index[0], 'to_pydatetime') else current_bars.index[0],
         }
-    
+
+    async def get_bars_multi_timeframe(
+        self,
+        symbol: str,
+        timeframes: List[str],
+        start: datetime,
+        end: datetime,
+    ) -> Dict[str, pd.DataFrame]:
+        """获取多个时间框架的K线数据
+
+        Args:
+            symbol: 交易标的
+            timeframes: 时间框架列表，如 ["1d", "1m"]
+            start: 开始时间
+            end: 结束时间
+
+        Returns:
+            {timeframe: DataFrame} 的字典
+        """
+        result: Dict[str, pd.DataFrame] = {}
+
+        for tf in timeframes:
+            bars_by_tf = self._bars_map_by_timeframe.get(tf, {})
+            if symbol in bars_by_tf:
+                bars = bars_by_tf[symbol]
+                mask = (bars.index >= start) & (bars.index <= end)
+                result[tf] = bars[mask].copy()
+                logger.debug(f"获取 {symbol} {tf}: {len(result[tf])} bars")
+            else:
+                logger.warning(f"没有找到 {symbol} {tf} 的数据")
+                result[tf] = pd.DataFrame()
+
+        return result
+
+    async def get_bars_for_timeframe(self, symbol: str, timeframe: str) -> pd.DataFrame:
+        """获取指定时间框架的数据（不指定日期范围，返回全部）
+
+        Args:
+            symbol: 交易标的
+            timeframe: 时间框架
+
+        Returns:
+            DataFrame
+        """
+        bars_by_tf = self._bars_map_by_timeframe.get(timeframe, {})
+        if symbol in bars_by_tf:
+            return bars_by_tf[symbol].copy()
+        return pd.DataFrame()
+
     async def close(self) -> None:
         """关闭数据源"""
         self._closed = True
         self._bars_map.clear()
+        self._bars_map_by_timeframe.clear()
         logger.info("HistoricalDataFeed 已关闭")
 
 
@@ -301,11 +403,36 @@ class DataFeedFactory:
         initial_capital: float = 100000.0,
         warmup_days: int = 260,
     ) -> HistoricalDataFeed:
-        """创建历史回放数据源"""
+        """创建历史回放数据源（单时间框架）"""
         return HistoricalDataFeed(
             initial_capital=initial_capital,
             warmup_days=warmup_days,
         )
+
+    @classmethod
+    def create_historical_feed_multi(
+        cls,
+        timeframes: List[str],
+        initial_capital: float = 100000.0,
+        warmup_days: int = 260,
+    ) -> HistoricalDataFeed:
+        """创建历史回放数据源（多时间框架）
+
+        Args:
+            timeframes: 时间框架列表，如 ["1d", "1m"]
+            initial_capital: 初始资金
+            warmup_days: 预热天数
+
+        Returns:
+            HistoricalDataFeed 实例
+        """
+        feed = HistoricalDataFeed(
+            initial_capital=initial_capital,
+            warmup_days=warmup_days,
+        )
+        # 保存 timeframes 以便 initialize_multi 时使用
+        feed._timeframes = timeframes
+        return feed
     
     @classmethod
     def create_live_feed(cls, source: str = "ib", **kwargs) -> DataFeed:

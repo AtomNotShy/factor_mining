@@ -24,9 +24,11 @@ from src.core.calendar import TradingCalendar
 from src.core.risk_manager import RiskManager
 from src.strategies.base.strategy import Strategy
 from src.strategies.base.freqtrade_interface import FreqtradeStrategy
+from src.strategies.base.informative import merge_informative_pairs
 from src.utils.logger import get_logger
 from src.data.storage.parquet_store import ParquetDataFrameStore
 from src.data.adapter.factory import adapter_factory
+from src.data.manager import data_manager
 from src.data.providers.base import DataFeed, HistoricalDataFeed
 from src.execution.providers.base import ExecutionProvider, SimulatedExecutionProvider, ExecutionProviderConfig
 from src.core.risk_manager import RiskManager
@@ -35,6 +37,7 @@ from .config import UnifiedConfig, FeatureFlag
 from .stoploss_manager import StoplossManager
 from .cost_model import CostModel
 from .config import BacktestResult
+from .data_validator import DataValidator
 
 
 StrategyType = Union[Strategy, FreqtradeStrategy]
@@ -101,6 +104,9 @@ class UnifiedBacktestEngine:
             data_feed=self._data_feed,
             event_engine=event_engine,
         )
+
+        # 市场数据缓存（用于回测最终化时获取收盘价）
+        self._bars_map: Optional[Dict[str, pd.DataFrame]] = None
         
         self._event_engine = event_engine or UnifiedEventEngine()
         self._store = store
@@ -111,7 +117,55 @@ class UnifiedBacktestEngine:
         
         # 特性组件初始化
         self._init_feature_components()
-    
+
+    def _standardize_bars_timezone(self, bars_map: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+        """
+        统一 bars 数据的时区：将所有 DataFrame 的索引转换为 tz-naive UTC
+
+        统一约定：
+        - 所有 bars 数据的索引都是 tz-naive UTC（代表 Wall Clock Time）
+        - 这样可以避免时区相关的比较和计算问题
+        """
+        self.logger.info(f"[TIMEZONE] 开始标准化时区，输入有 {len(bars_map)} 个 timeframe")
+
+        standardized = {}
+        for tf, bars in bars_map.items():
+            if bars is None or bars.empty:
+                self.logger.warning(f"[TIMEZONE] {tf} 数据为空，跳过")
+                continue
+
+            df = bars.copy()
+
+            # 检查原始时区
+            original_tz = getattr(df.index, 'tz', None)
+            self.logger.debug(f"[TIMEZONE] {tf} 原始时区: {original_tz}")
+
+            # 确保索引是 DatetimeIndex
+            if not isinstance(df.index, pd.DatetimeIndex):
+                try:
+                    df.index = pd.to_datetime(df.index)
+                except Exception:
+                    self.logger.warning(f"无法将 {tf} 的索引转换为 DatetimeIndex")
+                    continue
+
+            # 统一为 tz-naive UTC
+            if getattr(df.index, "tz", None) is not None:
+                df.index = df.index.tz_convert("UTC").tz_localize(None)
+                self.logger.debug(f"[TIMEZONE] {tf} 已转换为 tz-naive")
+            else:
+                self.logger.debug(f"[TIMEZONE] {tf} 已经是 tz-naive")
+
+            standardized[tf] = df.sort_index()
+
+        self.logger.info(f"[TIMEZONE] 标准化完成，输出有 {len(standardized)} 个 timeframe")
+
+        if len(standardized) < len(bars_map):
+            self.logger.warning(
+                f"时区标准化后丢失了部分数据: {len(bars_map)} -> {len(standardized)}"
+            )
+
+        return standardized
+
     def _init_feature_components(self) -> None:
         """初始化特性相关组件"""
         if FeatureFlag.STOPLOSS_MANAGER in self.config.features:
@@ -172,6 +226,12 @@ class UnifiedBacktestEngine:
         bars_map = await self._load_data(universe, start, end, ctx, auto_download)
         if bars_map is None or all(df.empty for df in bars_map.values()):
             return BacktestResult(run_id=self._context.run_id)
+
+        # 统一时区处理：所有 bars 数据转换为 tz-naive UTC
+        bars_map = self._standardize_bars_timezone(bars_map)
+
+        # 保存 bars_map 以便 _finalize_backtest 使用
+        self._bars_map = bars_map
         
         # 向量化预计算
         if FeatureFlag.VECTORIZED in self.config.features:
@@ -226,6 +286,10 @@ class UnifiedBacktestEngine:
     ) -> Optional[Dict[str, pd.DataFrame]]:
         """加载市场数据"""
         self.logger.info("Phase 1: Loading Data")
+
+        provider = "auto"
+        if isinstance(ctx.config, dict):
+            provider = ctx.config.get("data", {}).get("provider", provider)
         
         timeframes = {self.config.time.signal_timeframe, self.config.time.execution_timeframe}
         if FeatureFlag.MULTI_TIMEFRAME in self.config.features:
@@ -246,27 +310,57 @@ class UnifiedBacktestEngine:
             
             try:
                 for symbol in universe:
-                    bars = await adapter_factory.get_data(
-                        symbol=symbol,
-                        start=start_dt,
-                        end=end_dt,
-                        timeframe=tf,
-                        mode="backtest",
-                        include_previous=self.config.time.warmup_days,
-                    )
-                    
+                    if auto_download:
+                        bars = await data_manager.get_ohlcv(
+                            symbol=symbol,
+                            start=start_dt,
+                            end=end_dt,
+                            timeframe=tf,
+                            auto_download=True,
+                            source_preference=provider,
+                        )
+                    else:
+                        bars = await adapter_factory.get_data(
+                            symbol=symbol,
+                            start=start_dt,
+                            end=end_dt,
+                            timeframe=tf,
+                            mode="backtest",
+                            include_previous=self.config.time.warmup_days,
+                        )
+
                     if not bars.empty:
                         if "symbol" not in bars.columns:
                             bars["symbol"] = symbol
                         bars_list.append(bars)
-                        
+
             except Exception as e:
                 self.logger.error(f"加载数据失败 {tf}: {e}")
             
             if bars_list:
                 bars_map[tf] = pd.concat(bars_list).sort_index()
                 self.logger.info(f"  {tf}: {len(bars_map[tf])} bars")
-        
+
+        # 数据验证
+        if bars_map:
+            validator = DataValidator(
+                min_success_rate=0.5,  # 至少50%的标的有数据
+                require_all_symbols=False,  # 不强制要求所有标的
+                min_bars_per_symbol=self.config.time.warmup_days,  # 至少要有warmup期的数据
+            )
+
+            validation_result = validator.validate(
+                universe=universe,
+                bars_map=bars_map,
+                start_date=start,
+                end_date=end,
+                warmup_days=self.config.time.warmup_days,
+            )
+
+            # 如果验证失败，记录警告（但不中断回测，因为可能部分数据就够用）
+            if not validation_result.is_valid:
+                self.logger.warning("数据验证未通过，回测结果可能不可靠")
+
         return bars_map
     
     async def _vectorized_precompute(
@@ -279,16 +373,45 @@ class UnifiedBacktestEngine:
         self.logger.info("Vectorized Pre-calculation")
         
         vectorized_data: Dict[str, Dict[str, pd.DataFrame]] = {}
+
+        informative_tfs: List[str] = []
+        if FeatureFlag.MULTI_TIMEFRAME in self.config.features:
+            informative_tfs.extend(self.config.time.informative_timeframes)
+        if FeatureFlag.DETAIL_TIMEFRAME in self.config.features and self.config.time.detail_timeframe:
+            informative_tfs.append(self.config.time.detail_timeframe)
+        if self.config.time.execution_timeframe and self.config.time.execution_timeframe != self.config.time.signal_timeframe:
+            informative_tfs.append(self.config.time.execution_timeframe)
+
+        informative_tfs = [tf for tf in dict.fromkeys(informative_tfs) if tf in bars_map]
         
         for strategy in strategies:
             strategy_data: Dict[str, pd.DataFrame] = {}
             main_tf = getattr(strategy, "timeframe", self.config.time.signal_timeframe)
             main_bars = bars_map.get(main_tf, pd.DataFrame())
+            if main_bars.empty or "symbol" not in main_bars.columns:
+                self.logger.warning(f"No bars for timeframe {main_tf}, skip strategy {strategy.strategy_id}")
+                vectorized_data[strategy.strategy_id] = strategy_data
+                continue
             
             for symbol in universe:
                 symbol_bars = main_bars[main_bars["symbol"] == symbol].copy()
                 if symbol_bars.empty:
                     continue
+
+                if informative_tfs:
+                    informative_dfs = {
+                        tf: bars_map[tf][bars_map[tf]["symbol"] == symbol].copy()
+                        for tf in informative_tfs
+                        if tf != main_tf and not bars_map[tf].empty
+                    }
+                    if informative_dfs:
+                        symbol_bars = merge_informative_pairs(
+                            symbol_bars,
+                            informative_dfs,
+                            main_tf,
+                            ffill=True,
+                            lookahead_check=True,
+                        )
                 
                 # Freqtrade 协议
                 if hasattr(strategy, 'populate_indicators'):
@@ -354,7 +477,12 @@ class UnifiedBacktestEngine:
     async def _initialize_strategy(self, strategy: StrategyType) -> None:
         """初始化策略"""
         self.logger.info(f"Initializing strategy: {strategy.strategy_id}")
-        
+
+        # 注入 data_feed（支持多时间框架策略）
+        if hasattr(strategy, 'data_feed'):
+            strategy.data_feed = self._data_feed
+            self.logger.debug(f"Injected data_feed to strategy: {strategy.strategy_id}")
+
         # 使用 isinstance 检查类型，避免类型检查器报错
         if isinstance(strategy, FreqtradeStrategy):
             await strategy.bot_start()
@@ -418,14 +546,51 @@ class UnifiedBacktestEngine:
         if hasattr(current_ts, 'tzinfo') and current_ts.tzinfo is not None:
             current_ts_compare = current_ts.replace(tzinfo=None)
 
+        if FeatureFlag.VECTORIZED in self.config.features:
+            ts_for_lookup = (
+                pd.Timestamp(current_ts_compare)
+                if isinstance(current_ts_compare, (date, datetime))
+                else current_ts_compare
+            )
+            if hasattr(ts_for_lookup, 'tz') and ts_for_lookup.tz is not None:
+                ts_for_lookup = ts_for_lookup.tz_convert(None)
+
+            visible_bars_map: Dict[str, pd.DataFrame] = {}
+            for tf, df in bars_map.items():
+                if df.empty or not isinstance(df.index, pd.DatetimeIndex):
+                    visible_bars_map[tf] = df
+                    continue
+
+                if ts_for_lookup in df.index:
+                    rows = df.loc[ts_for_lookup]
+                    if isinstance(rows, pd.Series):
+                        rows = rows.to_frame().T
+                    visible_bars_map[tf] = rows
+                else:
+                    visible_bars_map[tf] = df.head(0)
+
+            visible_bars = visible_bars_map.get(signal_tf, pd.DataFrame())
+            bars_all = pd.concat(visible_bars_map.values()) if visible_bars_map else pd.DataFrame()
+
+            return MarketData(
+                bars=visible_bars,
+                bars_map=visible_bars_map,
+                bars_all=bars_all,
+            )
+
         # 截断到当前时间（避免前视）
-        visible_bars = signal_bars[signal_bars.index <= current_ts_compare]
+        if signal_bars.empty or not isinstance(signal_bars.index, pd.DatetimeIndex):
+            visible_bars = signal_bars
+        else:
+            visible_bars = signal_bars[signal_bars.index <= current_ts_compare]
 
         # 截断所有时间框架
-        visible_bars_map = {
-            tf: df[df.index <= current_ts_compare]
-            for tf, df in bars_map.items()
-        }
+        visible_bars_map = {}
+        for tf, df in bars_map.items():
+            if df.empty or not isinstance(df.index, pd.DatetimeIndex):
+                visible_bars_map[tf] = df
+            else:
+                visible_bars_map[tf] = df[df.index <= current_ts_compare]
         
         return MarketData(
             bars=visible_bars,
@@ -439,24 +604,96 @@ class UnifiedBacktestEngine:
         md: MarketData,
         ctx: RunContext,
     ) -> List[Signal]:
-        """生成信号"""
+        """Generate signals with protective filtering."""
         # Freqtrade 协议
         if FeatureFlag.FREQTRADE_PROTOCOL in self.config.features:
             # 使用 isinstance 检查类型，避免类型检查器报错
             if isinstance(strategy, FreqtradeStrategy):
                 await strategy.bot_loop_start()
-            
+
             # 从向量化结果获取
             if FeatureFlag.VECTORIZED in self.config.features and self._context:
-                signals = self._get_signals_from_vectorized(strategy, md)
-                if signals:
-                    return signals
-        
+                raw_signals = self._get_signals_from_vectorized(strategy, md)
+                if raw_signals:
+                    # 防护层：过滤与持仓状态冲突的信号
+                    return self._filter_signals_by_position(raw_signals)
+
         # 回退到原生接口
         if hasattr(strategy, 'generate_signals'):
-            return strategy.generate_signals(md, ctx)
-        
+            raw_signals = strategy.generate_signals(md, ctx)
+            # 防护层：过滤与持仓状态冲突的信号
+            return self._filter_signals_by_position(raw_signals)
+
         return []
+
+    def _filter_signals_by_position(self, signals: List[Signal]) -> List[Signal]:
+        """Filter signals that conflict with current position state.
+
+        This is a protective layer that prevents:
+        - Duplicate LONG signals for symbols already held
+        - FLAT signals for symbols not held (no position to close)
+        """
+        if not signals or self._execution_provider is None:
+            return signals
+
+        portfolio = self._execution_provider.get_portfolio_state()
+        valid_signals = []
+
+        for signal in signals:
+            current_qty = portfolio.positions.get(signal.symbol, 0.0)
+
+            # Skip LONG signal if already holding this symbol
+            if signal.action == ActionType.LONG and abs(current_qty) > 1e-8:
+                self.logger.debug(
+                    f"Filtered duplicate LONG: {signal.symbol} "
+                    f"(already holding {current_qty:.2f})"
+                )
+                continue
+
+            # Skip FLAT signal if not holding this symbol
+            if signal.action == ActionType.FLAT and abs(current_qty) < 1e-8:
+                self.logger.debug(
+                    f"Filtered invalid FLAT: {signal.symbol} "
+                    f"(no position to close)"
+                )
+                continue
+
+            valid_signals.append(signal)
+
+        return valid_signals
+
+    def _select_row_for_ts(
+        self,
+        bars: pd.DataFrame,
+        ts_for_lookup: Any,
+        ts_date: Any,
+    ) -> Optional[pd.Series]:
+        if bars.empty or not isinstance(bars.index, pd.DatetimeIndex):
+            return None
+
+        if isinstance(ts_for_lookup, pd.Timestamp):
+            if ts_for_lookup in bars.index:
+                row = bars.loc[ts_for_lookup]
+                return row.iloc[-1] if isinstance(row, pd.DataFrame) else row
+
+        by_date = bars.attrs.get("_by_date_map")
+        if by_date is None:
+            by_date = {}
+            tail_rows = bars.groupby(bars.index.date).tail(1)
+            for dt, row in tail_rows.iterrows():
+                by_date[dt.date()] = row
+            bars.attrs["_by_date_map"] = by_date
+
+        row = by_date.get(ts_date)
+        if row is not None:
+            return row
+
+        if isinstance(ts_for_lookup, pd.Timestamp):
+            pos = bars.index.searchsorted(ts_for_lookup, side="right") - 1
+            if pos >= 0:
+                return bars.iloc[pos]
+
+        return None
     
     def _get_signals_from_vectorized(
         self,
@@ -476,10 +713,15 @@ class UnifiedBacktestEngine:
 
         # 转换 current_ts 为 Timestamp 以匹配 bars 索引
         ts_for_lookup = pd.Timestamp(current_ts) if isinstance(current_ts, (date, datetime)) else current_ts
-        
+
         # 移除时区信息以匹配 tz-naive 的 bars 索引
         if hasattr(ts_for_lookup, 'tz') and ts_for_lookup.tz is not None:
             ts_for_lookup = ts_for_lookup.tz_convert(None)
+
+        # 标准化为 date 以匹配可能有不同时间组件的 bars 索引
+        # 数据的时间戳可能是 04:00:00 或其他时间，而时间轴是 00:00:00
+        # 我们需要找到当天的数据，所以按日期匹配
+        ts_date = ts_for_lookup.date() if hasattr(ts_for_lookup, 'date') else ts_for_lookup
         
         # 转换为 datetime
         if isinstance(ts_for_lookup, pd.Timestamp):
@@ -490,209 +732,115 @@ class UnifiedBacktestEngine:
             ts_datetime = current_ts
 
         signals = []
-        
-        # 对于ETF动量策略，我们需要选择动量最强的ETF
-        # 检查是否是ETF动量策略
-        is_etf_momentum = (
-            hasattr(strategy, 'strategy_id') and 
-            'etf_momentum' in strategy.strategy_id
+
+        # 检查是否启用组合选择
+        use_portfolio_selection = (
+            FeatureFlag.PORTFOLIO_SELECTION in self.config.features and
+            hasattr(strategy, 'get_portfolio_selection_signal')
         )
-        
-        if is_etf_momentum:
-            # ETF动量策略：选择动量评分最高的ETF
-            best_symbol = None
-            best_score = -float('inf')
-            best_row = None
-            
-            # 检查当前持仓
-            current_positions = {}
-            if self._execution_provider:
-                portfolio = self._execution_provider.get_portfolio_state()
-                current_positions = portfolio.positions
-            
-            # 查找当前持仓的ETF
-            current_holding = None
-            for symbol, qty in current_positions.items():
-                if abs(qty) > 1e-8:  # 有持仓
+
+        # 获取当前持仓
+        current_holding: Optional[str] = None
+        if self._execution_provider:
+            portfolio = self._execution_provider.get_portfolio_state()
+            for symbol, qty in portfolio.positions.items():
+                if abs(qty) > 1e-8:
                     current_holding = symbol
                     break
-            
-            for symbol, bars in strategy_data.items():
-                if ts_for_lookup not in bars.index:
-                    continue
 
-                row = bars.loc[ts_for_lookup]
-                if isinstance(row, pd.DataFrame):
-                    row = row.iloc[-1]
-                
-                # 获取动量评分
-                momentum_score = row.get('momentum_score', 0)
-                momentum_r2 = row.get('momentum_r2', 0)
-                
-                # 检查进场条件
-                enter_long = row.get('enter_long', 0)
-                is_enter_signal = enter_long is True or enter_long == 1
-                
-                # 检查离场条件
-                exit_long = row.get('exit_long', 0)
-                is_exit_signal = exit_long is True or exit_long == 1
-                
-                # 如果是当前持仓且出现离场信号，生成离场信号
-                if symbol == current_holding and is_exit_signal:
-                    signals.append(Signal(
-                        ts_utc=ts_datetime,  # type: ignore[arg-type]
-                        symbol=symbol,
-                        strategy_id=strategy.strategy_id,
-                        action=ActionType.FLAT,
-                        strength=row.get('exit_tag', 1.0),
-                    ))
-                    self.logger.info(
-                        f"ETF轮动: 离场 {symbol} (动量评分: {momentum_score:.4f}, R²: {momentum_r2:.4f})"
-                    )
-                    current_holding = None  # 标记为已离场
-                
-                # 如果是进场信号且动量评分最高，记录为最佳ETF
-                # 只有当没有持仓或需要换仓时才考虑进场
-                if is_enter_signal and momentum_score > best_score:
-                    # 如果当前有持仓，需要检查是否需要换仓
-                    if current_holding is None:
-                        # 没有持仓，直接选择最佳ETF
-                        best_score = momentum_score
-                        best_symbol = symbol
-                        best_row = row
-                    elif symbol != current_holding:
-                        # 有持仓，检查是否需要换仓
-                        # 获取当前持仓的动量评分
-                        if current_holding in strategy_data:
-                            current_bars = strategy_data[current_holding]
-                            if ts_for_lookup in current_bars.index:
-                                current_row = current_bars.loc[ts_for_lookup]
-                                if isinstance(current_row, pd.DataFrame):
-                                    current_row = current_row.iloc[-1]
-                                current_score = current_row.get('momentum_score', 0)
-                                
-                                # 更严格的换仓条件：
-                                # 1. 新ETF的动量评分必须比当前持仓高50%（1.5倍）
-                                # 2. 新ETF的动量评分必须为正
-                                # 3. 当前持仓的动量评分不能为负（避免在亏损时换仓）
-                                # 4. 新ETF的R²必须超过阈值
-                                # 5. 当前持仓必须有离场信号或动量转负
-                                momentum_r2 = row.get('momentum_r2', 0)
-                                current_r2 = current_row.get('momentum_r2', 0)
-                                
-                                # 检查当前持仓是否有离场信号
-                                current_exit_long = current_row.get('exit_long', 0)
-                                is_current_exit_signal = current_exit_long is True or current_exit_long == 1
-                                
-                                # 检查新ETF是否有进场信号
-                                enter_long = row.get('enter_long', 0)
-                                is_enter_signal = enter_long is True or enter_long == 1
-                                
-                                # 换仓条件：
-                                # 1. 当前持仓有离场信号 OR 新ETF动量评分显著更高
-                                # 2. 新ETF有进场信号
-                                # 3. 新ETF的R²超过阈值
-                                if (is_current_exit_signal or 
-                                    (momentum_score > current_score * 1.5 and momentum_score > 0)) and \
-                                   is_enter_signal and \
-                                   momentum_r2 >= getattr(strategy, 'r2_threshold', 0.5):
-                                    best_score = momentum_score
-                                    best_symbol = symbol
-                                    best_row = row
-                                    self.logger.info(
-                                        f"ETF轮动: 考虑换仓 {current_holding}→{symbol} "
-                                        f"({current_score:.4f}→{momentum_score:.4f}, "
-                                        f"R²: {current_r2:.4f}→{momentum_r2:.4f})"
-                                    )
-            
-            # 如果找到最佳ETF，生成进场信号
-            if best_symbol is not None and best_row is not None:
-                # 如果当前有持仓且不是最佳ETF，先平仓
-                if current_holding is not None and current_holding != best_symbol:
-                    # 检查当前持仓是否有离场信号
-                    if current_holding in strategy_data:
-                        current_bars = strategy_data[current_holding]
-                        if ts_for_lookup in current_bars.index:
-                            current_row = current_bars.loc[ts_for_lookup]
-                            if isinstance(current_row, pd.DataFrame):
-                                current_row = current_row.iloc[-1]
-                            
-                            # 检查是否有离场信号
-                            exit_long = current_row.get('exit_long', 0)
-                            is_exit_signal = exit_long is True or exit_long == 1
-                            
-                            # 如果有离场信号，生成平仓信号
-                            if is_exit_signal:
-                                signals.append(Signal(
-                                    ts_utc=ts_datetime,  # type: ignore[arg-type]
-                                    symbol=current_holding,
-                                    strategy_id=strategy.strategy_id,
-                                    action=ActionType.FLAT,
-                                    strength=current_row.get('exit_tag', 1.0),
-                                ))
-                                self.logger.info(
-                                    f"ETF轮动: 离场 {current_holding} (动量评分: {current_row.get('momentum_score', 0):.4f})"
-                                )
-                            else:
-                                # 没有离场信号，但需要换仓，生成平仓信号
-                                signals.append(Signal(
-                                    ts_utc=ts_datetime,  # type: ignore[arg-type]
-                                    symbol=current_holding,
-                                    strategy_id=strategy.strategy_id,
-                                    action=ActionType.FLAT,
-                                    strength=1.0,  # 使用默认强度
-                                ))
-                                self.logger.info(
-                                    f"ETF轮动: 换仓 {current_holding}→{best_symbol}"
-                                )
-                
-                # 生成进场信号
-                signals.append(Signal(
-                    ts_utc=ts_datetime,  # type: ignore[arg-type]
-                    symbol=best_symbol,
-                    strategy_id=strategy.strategy_id,
-                    action=ActionType.LONG,
-                    strength=best_row.get('enter_tag', 1.0),
-                ))
-                self.logger.info(
-                    f"ETF轮动: 选择 {best_symbol} (动量评分: {best_score:.4f}, R²: {best_row.get('momentum_r2', 0):.4f})"
-                )
-        else:
-            # 其他策略：为每个符合条件的ETF生成信号
-            for symbol, bars in strategy_data.items():
-                if ts_for_lookup not in bars.index:
-                    continue
+        # 组合选择：获取应该持有/平仓的标的列表
+        portfolio_decisions: Dict[str, str] = {}  # symbol -> action (LONG/FLAT/KEEP)
+        if use_portfolio_selection:
+            # 使用原始时间戳（而不是日期）传递给策略，让策略自己处理
+            decisions = strategy.get_portfolio_selection_signal(
+                strategy_data,
+                ts_for_lookup,
+                current_holding,
+            )
+            for symbol, decision in decisions.items():
+                portfolio_decisions[symbol] = decision.get('action', 'KEEP')
 
-                row = bars.loc[ts_for_lookup]
-                if isinstance(row, pd.DataFrame):
-                    row = row.iloc[-1]
-                
-                # 检查进场信号
-                # 支持 boolean True 和整数 1
+            # Debug logging
+            if portfolio_decisions:
+                self.logger.debug(f"[{ts_for_lookup}] Portfolio decisions: {portfolio_decisions}")
+
+        # 生成信号
+        for symbol, bars in strategy_data.items():
+            row = self._select_row_for_ts(bars, ts_for_lookup, ts_date)
+            if row is None:
+                self.logger.debug(f"[{ts_for_lookup}] Symbol {symbol} has no data for {ts_date}")
+                continue
+
+            # 如果启用了组合选择，使用决策结果
+            if use_portfolio_selection:
+                # 只在有portfolio决策时生成信号（避免在非轮动日使用enter_long/exit_long）
+                if symbol in portfolio_decisions:
+                    action = portfolio_decisions[symbol]
+                    if action == 'LONG':
+                        signal = Signal(
+                            ts_utc=ts_datetime,
+                            symbol=symbol,
+                            strategy_id=strategy.strategy_id,
+                            action=ActionType.LONG,
+                            strength=row.get('enter_tag', 1.0),
+                        )
+                        signals.append(signal)
+                        self.logger.debug(f"[{ts_for_lookup}] Generated LONG signal for {symbol}")
+                    elif action == 'FLAT':
+                        signal = Signal(
+                            ts_utc=ts_datetime,
+                            symbol=symbol,
+                            strategy_id=strategy.strategy_id,
+                            action=ActionType.FLAT,
+                            strength=row.get('exit_tag', 1.0),
+                        )
+                        signals.append(signal)
+                        self.logger.debug(f"[{ts_for_lookup}] Generated FLAT signal for {symbol}")
+                    # KEEP 不生成信号
+            else:
+                # 默认行为：每只ETF独立判断（仅在未启用portfolio selection时使用）
                 enter_long = row.get('enter_long', 0)
                 if enter_long is True or enter_long == 1:
                     signals.append(Signal(
-                        ts_utc=ts_datetime,  # type: ignore[arg-type]
+                        ts_utc=ts_datetime,
                         symbol=symbol,
                         strategy_id=strategy.strategy_id,
                         action=ActionType.LONG,
                         strength=row.get('enter_tag', 1.0),
                     ))
 
-                # 检查离场信号
                 exit_long = row.get('exit_long', 0)
-                # 支持 boolean True 和整数 1
                 if exit_long is True or exit_long == 1:
                     signals.append(Signal(
-                        ts_utc=ts_datetime,  # type: ignore[arg-type]
+                        ts_utc=ts_datetime,
                         symbol=symbol,
                         strategy_id=strategy.strategy_id,
                         action=ActionType.FLAT,
                         strength=row.get('exit_tag', 1.0),
                     ))
 
+        if signals:
+            self.logger.debug(f"[{ts_for_lookup}] Generated {len(signals)} signals")
+
         return signals
     
+    def _get_current_price(self, symbol: str) -> float:
+        """获取当前价格"""
+        if self._context is None or self._context.current_ts is None:
+            return 0.0
+        
+        # 从执行提供者的_current_prices字典获取价格
+        if hasattr(self._execution_provider, '_current_prices'):
+            current_prices = self._execution_provider._current_prices
+            if symbol in current_prices:
+                price = current_prices[symbol]
+                if price > 0:
+                    return price
+        
+        # 如果无法获取价格，返回默认值
+        self.logger.warning(f"无法获取 {symbol} 的当前价格，使用默认值100")
+        return 100.0
+
     async def _convert_to_orders(
         self,
         strategy: StrategyType,
@@ -733,13 +881,34 @@ class UnifiedBacktestEngine:
             else:  # FLAT 或其他
                 side = OrderSide.SELL  # 平仓：卖出
             
+            # 获取当前价格来计算股票数量
+            current_price = self._get_current_price(signal.symbol)
+            if current_price <= 0:
+                self.logger.warning(f"无法获取 {signal.symbol} 的价格，跳过订单")
+                continue
+            
+            # 获取当前持仓数量
+            current_qty = portfolio.positions.get(signal.symbol, 0.0)
+            
+            # 对于FLAT信号，清空当前持仓；对于LONG信号，使用固定金额
+            if signal.action == ActionType.FLAT:
+                # 平仓信号：清空当前持仓
+                qty = abs(current_qty)
+            else:
+                # 开仓信号：计算买入数量
+                qty = stake_amount / current_price
+            
+            # 如果没有持仓或数量为0，跳过
+            if qty <= 1e-8:
+                continue
+            
             order = OrderIntent(
                 ts_utc=signal.ts_utc,
                 symbol=signal.symbol,
                 strategy_id=signal.strategy_id,
                 side=side,
                 order_type=OrderType.MKT,
-                qty=stake_amount,
+                qty=qty,
             )
             orders.append(order)
 
@@ -1089,49 +1258,73 @@ class UnifiedBacktestEngine:
         portfolio: PortfolioState,
     ) -> float:
         """使用最后一天的市场价格计算最终权益"""
-        if not self._context or not self._context.trading_days:
+        if not self._context:
             return portfolio.cash
-            
-        # 获取最后一天的日期
-        last_day = self._context.trading_days[-1]
-        if isinstance(last_day, datetime):
-            last_day = last_day.date()
-        
-        # 尝试从最后一天的 K 线获取收盘价
-        positions_value = 0.0
-        
-        # 从市场数据获取最后一天的价格
-        # 我们需要访问 bars_map，但这里没有直接访问
-        # 作为临时修复，使用 portfolio.equity 中的权益计算
-        # 但 portfolio.equity 使用平均成本价，所以我们需要重新计算
-        
+
         # 如果没有持仓，直接返回现金
         if not portfolio.positions:
             return portfolio.cash
-        
-        # 使用平均成本价作为最后手段
+
+        # 获取最后一天的收盘价
+        def get_last_close_price(symbol: str) -> Optional[float]:
+            """获取指定标的最后一天的收盘价"""
+            if not self._bars_map:
+                return None
+
+            # 优先使用 signal_timeframe 的数据
+            tf = self.config.time.signal_timeframe
+            if tf not in self._bars_map:
+                tf = next(iter(self._bars_map.keys()), None)
+                if not tf:
+                    return None
+
+            bars = self._bars_map.get(tf)
+            if bars is None or bars.empty:
+                return None
+
+            # 筛选该 symbol 的数据
+            symbol_bars = bars[bars["symbol"] == symbol] if "symbol" in bars.columns else bars
+            if symbol_bars.empty:
+                return None
+
+            # 获取最后一天的收盘价
+            last_close = symbol_bars["close"].iloc[-1]
+            return float(last_close) if pd.notna(last_close) else None
+
+        # 使用最后一天收盘价计算持仓价值
+        positions_value = 0.0
+
+        # 调试：检查 bars_map 状态
+        if not self._bars_map:
+            self.logger.warning("[FINAL_EQUITY] bars_map 为空，无法使用收盘价计算")
+        else:
+            self.logger.debug(f"[FINAL_EQUITY] bars_map 包含 {len(self._bars_map)} 个 timeframe")
+
         for symbol, qty in portfolio.positions.items():
             if abs(qty) < 1e-8:
                 continue
-            
-            # 使用平均成本价
-            avg_price = portfolio.avg_price.get(symbol, 0.0)
-            if avg_price > 0:
-                positions_value += abs(qty) * avg_price
-                self.logger.debug(f"使用成本价计算 {symbol}: qty={qty:.4f}, price={avg_price:.4f}, value={abs(qty) * avg_price:.2f}")
+
+            # 优先使用最后一天收盘价
+            final_price = get_last_close_price(symbol)
+
+            if final_price is not None and final_price > 0:
+                self.logger.info(f"[FINAL_EQUITY] {symbol}: 使用收盘价 {final_price:.4f}, qty={qty:.4f}")
             else:
-                # 如果没有平均成本价，使用最后成交价
-                # 查找该symbol的最后成交价
-                last_fill_price = 0.0
-                if self._context:
+                # 如果无法从 bars_map 获取，使用成本价作为 fallback
+                avg_price = portfolio.avg_price.get(symbol, 0.0)
+                if avg_price > 0:
+                    final_price = avg_price
+                    self.logger.info(f"[FINAL_EQUITY] {symbol}: 使用成本价 {avg_price:.4f}, qty={qty:.4f}")
+                else:
+                    # 如果没有成本价，尝试最后成交价
                     for fill in reversed(self._context.all_fills):
                         if fill.symbol == symbol:
-                            last_fill_price = fill.price
+                            final_price = fill.price
+                            self.logger.info(f"[FINAL_EQUITY] {symbol}: 使用最后成交价 {fill.price:.4f}, qty={qty:.4f}")
                             break
-                
-                if last_fill_price > 0:
-                    positions_value += abs(qty) * last_fill_price
-                    self.logger.debug(f"使用最后成交价计算 {symbol}: qty={qty:.4f}, price={last_fill_price:.4f}, value={abs(qty) * last_fill_price:.2f}")
+
+            if final_price and final_price > 0:
+                positions_value += abs(qty) * final_price
         
         final_equity = portfolio.cash + positions_value
         
@@ -1142,6 +1335,200 @@ class UnifiedBacktestEngine:
         
         return final_equity
     
+    def _finalize_backtest(
+        self,
+        portfolio: PortfolioState,
+    ) -> tuple[List[Dict], List[Fill]]:
+        """
+        统一回测最终化处理
+
+        在回测结束时，强制平仓所有未平仓持仓，计算真实盈亏。
+        这确保了胜率计算包含所有交易的盈亏，而不仅仅是已平仓交易。
+
+        Returns:
+            closed_trades: 包含所有交易（含未平仓强制平仓）的盈亏列表
+            final_fills: 强制平仓产生的 Fill 记录列表
+        """
+        from src.core.types import Fill, OrderSide
+        from src.utils.cli_printer import CLIPrinter
+        import uuid
+        from datetime import datetime
+
+        if self._context is None:
+            return [], []
+
+        # 1. 首先匹配已平仓交易（使用原始 fill.price）
+        closed_trades, open_lots = CLIPrinter.match_trades(self._context.all_fills)
+
+        # 2. 使用实际每日收盘价重新计算所有交易的 PnL
+        def get_close_price(symbol: str, ts: datetime) -> Optional[float]:
+            """获取指定日期的收盘价（数据已统一为 tz-naive）"""
+            if not self._bars_map:
+                return None
+
+            tf = self.config.time.signal_timeframe
+            if tf not in self._bars_map:
+                tf = next(iter(self._bars_map.keys()), None)
+                if not tf:
+                    return None
+
+            bars = self._bars_map.get(tf)
+            if bars is None or bars.empty:
+                return None
+
+            # 筛选该 symbol 的数据
+            symbol_bars = bars[bars["symbol"] == symbol] if "symbol" in bars.columns else bars
+            if symbol_bars.empty:
+                return None
+
+            # 找到最接近该日期的收盘价
+            if hasattr(symbol_bars.index, 'date'):
+                symbol_bars = symbol_bars.sort_index()
+
+                # 统一时区：使用 pandas Timestamp 进行比较
+                # 确保两边都是 tz-naive
+                idx = symbol_bars.index
+                ts_norm = pd.Timestamp(ts)
+                if ts_norm.tz is not None:
+                    ts_norm = ts_norm.tz_localize(None)
+
+                # 确保索引也是 tz-naive
+                if idx.tz is not None:
+                    idx = idx.tz_localize(None)
+
+                # 找到日期 <= ts 的最后一条
+                mask = idx <= ts_norm
+                if mask.any():
+                    return float(symbol_bars.loc[mask, "close"].iloc[-1])
+
+            return None
+
+        # 重新计算每笔交易的 PnL（使用实际收盘价）
+        recalculated_trades = []
+        for trade in closed_trades:
+            symbol = trade.get("symbol")
+            entry_ts = trade.get("ts")
+            exit_ts = trade.get("exit_ts")
+
+            self.logger.debug(f"[DEBUG] {symbol}: entry_ts={entry_ts} (type={type(entry_ts)}), exit_ts={exit_ts}")
+
+            if entry_ts and exit_ts:
+                # 获取实际收盘价
+                entry_price = get_close_price(symbol, entry_ts)
+                exit_price = get_close_price(symbol, exit_ts)
+
+                if entry_price and exit_price and entry_price > 0:
+                    trade["entry_price"] = entry_price
+                    trade["exit_price"] = exit_price
+                    trade["pnl"] = (exit_price - entry_price) * trade.get("qty", 0)
+                    trade["ret_pct"] = (exit_price - entry_price) / entry_price if entry_price > 0 else 0
+                    self.logger.debug(
+                        f"[RECALC] {symbol}: entry={entry_price:.4f} @ {entry_ts}, "
+                        f"exit={exit_price:.4f} @ {exit_ts}, pnl={trade['pnl']:.2f}"
+                    )
+
+            recalculated_trades.append(trade)
+
+        # 3. 检查是否有未平仓持仓
+        final_fills: List[Fill] = []
+        if not portfolio.positions:
+            return recalculated_trades, final_fills
+
+        # 4. 获取最后一天的日期作为平仓时间
+        last_day = None
+        if self._context.trading_days:
+            last_day = self._context.trading_days[-1]
+            if isinstance(last_day, datetime):
+                pass
+            elif hasattr(last_day, 'date'):
+                last_day = datetime.combine(last_day, datetime.min.time())
+            else:
+                last_day = datetime.combine(last_day, datetime.min.time())
+        else:
+            last_day = datetime.now()
+
+        last_ts = self._context.all_fills[-1].ts_fill_utc if self._context.all_fills else last_day
+
+        # 5. 处理未平仓持仓（使用最后一天收盘价）
+        for symbol, qty in portfolio.positions.items():
+            if abs(qty) < 1e-8:
+                continue
+
+            # 获取入场时间
+            entry_ts = None
+            if symbol in open_lots and open_lots[symbol]:
+                lot = open_lots[symbol][0]
+                entry_ts = lot.get("ts")
+
+            if not entry_ts:
+                # 查找最后一次买入时间
+                for fill in reversed(self._context.all_fills):
+                    if fill.symbol == symbol and fill.side == OrderSide.BUY:
+                        entry_ts = fill.ts_fill_utc
+                        break
+
+            if not entry_ts:
+                self.logger.warning(f"无法获取 {symbol} 的入场时间，跳过强制平仓")
+                continue
+
+            # 获取入场和出场收盘价
+            entry_price = get_close_price(symbol, entry_ts)
+            exit_price = get_close_price(symbol, last_ts)
+
+            if not entry_price or entry_price <= 0:
+                self.logger.warning(f"无法获取 {symbol} 的入场价格，跳过强制平仓")
+                continue
+
+            if not exit_price or exit_price <= 0:
+                exit_price = entry_price  # fallback
+
+            # 创建强制平仓的 Fill 记录
+            close_fill = Fill(
+                fill_id=str(uuid.uuid4()),
+                order_id=str(uuid.uuid4()),
+                symbol=symbol,
+                side=OrderSide.SELL if qty > 0 else OrderSide.BUY,
+                qty=abs(qty),
+                price=exit_price,
+                fee=0.0,
+                ts_fill_utc=last_ts,
+                metadata={
+                    "exit_reason": "FORCE_CLOSE_AT_END",
+                    "is_final_close": True,
+                }
+            )
+            final_fills.append(close_fill)
+
+            # 计算未实现盈亏
+            pnl = (exit_price - entry_price) * abs(qty) if qty > 0 else (entry_price - exit_price) * abs(qty)
+            ret_pct = (exit_price - entry_price) / entry_price if entry_price > 0 else 0.0
+
+            duration = None
+            if entry_ts and last_ts:
+                duration = (last_ts - entry_ts).total_seconds()
+
+            trade = {
+                "symbol": symbol,
+                "qty": abs(qty),
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "pnl": pnl,
+                "ret_pct": ret_pct,
+                "duration": duration,
+                "entry_tag": "LONG",
+                "exit_reason": "FORCE_CLOSE_AT_END",
+                "exit_ts": last_ts,
+                "is_force_close": True,
+            }
+            recalculated_trades.append(trade)
+
+            self.logger.info(
+                f"[FINALIZE] {symbol}: qty={abs(qty):.4f}, entry={entry_price:.4f}, "
+                f"exit={exit_price:.4f} (market close), pnl={pnl:.2f}"
+            )
+
+        return recalculated_trades, final_fills
+
     def _generate_result(
         self,
         portfolio: PortfolioState,
@@ -1151,23 +1538,49 @@ class UnifiedBacktestEngine:
         """生成回测结果"""
         if self._context is None:
             return BacktestResult()
-            
+
         initial_capital = self.config.trade.initial_capital
-        
+
         # 调试：打印 portfolio 状态
         self.logger.debug(f"[DEBUG] portfolio.cash = {portfolio.cash:.2f}")
         self.logger.debug(f"[DEBUG] portfolio.equity = {portfolio.equity:.2f}")
         self.logger.debug(f"[DEBUG] portfolio.positions = {portfolio.positions}")
         self.logger.debug(f"[DEBUG] portfolio.avg_price = {portfolio.avg_price}")
-        
+
+        # 统一回测最终化：处理未平仓持仓
+        closed_trades, final_fills = self._finalize_backtest(portfolio)
+
+        # 将最终化的 fills 添加到 all_fills（用于完整记录）
+        all_fills_with_final = list(self._context.all_fills) + final_fills
+
+        # 计算交易统计
+        total_trades = len(closed_trades)
+        winning_trades = len([t for t in closed_trades if t.get('pnl', 0) > 0])
+        losing_trades = len([t for t in closed_trades if t.get('pnl', 0) < 0])
+        draw_trades = len([t for t in closed_trades if t.get('pnl', 0) == 0])
+
+        # 计算胜率
+        win_rate = winning_trades / total_trades if total_trades > 0 else 0.0
+
+        # 计算盈亏
+        total_pnl = sum(t.get('pnl', 0) for t in closed_trades)
+        profits = [t.get('pnl', 0) for t in closed_trades if t.get('pnl', 0) > 0]
+        losses = [abs(t.get('pnl', 0)) for t in closed_trades if t.get('pnl', 0) < 0]
+        profit_factor = sum(profits) / sum(losses) if sum(losses) > 0 else float('inf')
+
+        self.logger.info(
+            f"[FINALIZE SUMMARY] total_trades={total_trades}, winning={winning_trades}, "
+            f"losing={losing_trades}, draw={draw_trades}, win_rate={win_rate:.2%}, total_pnl={total_pnl:.2f}"
+        )
+
         # 修复：使用最后一天的市场价格重新计算 equity，而非成本价
         final_equity = self._calculate_final_equity_with_market_price(portfolio)
-        
+
         total_return = (final_equity / initial_capital) - 1
-        
+
         self.logger.debug(f"[DEBUG] final_equity = {final_equity:.2f}")
         self.logger.debug(f"[DEBUG] total_return = {total_return:.4f}")
-        
+
         performance = self._calculate_performance_metrics(ctx)
         annualized_return = performance.get("annual_return", 0.0)
         volatility = performance.get("annual_volatility", 0.0)
@@ -1177,26 +1590,16 @@ class UnifiedBacktestEngine:
         raw_max_drawdown = performance.get("max_drawdown", 0.0)
         max_drawdown = abs(raw_max_drawdown)
         max_drawdown_pct = max_drawdown
-        profit_factor = performance.get("profit_factor", 0.0)
-        win_rate_metric = performance.get("win_rate", 0.0)
+        perf_profit_factor = performance.get("profit_factor", 0.0)
 
-        from src.utils.cli_printer import CLIPrinter
-        closed_trades, _ = CLIPrinter.match_trades(self._context.all_fills)
-
-        total_trades = len(closed_trades)
-        winning_trades = len([t for t in closed_trades if t.get('pnl', 0) > 0])
+        # 使用引擎计算的 profit_factor（如果有效）
+        profit_factor = perf_profit_factor if perf_profit_factor > 0 else profit_factor
 
         unique_fill_ids = {
-            fill.fill_id for fill in self._context.all_fills
+            fill.fill_id for fill in all_fills_with_final
             if getattr(fill, "fill_id", None)
         }
         fills_count = len(unique_fill_ids)
-        if total_trades == 0:
-            total_trades = fills_count
-
-        win_rate = win_rate_metric if total_trades > 0 and win_rate_metric else (
-            winning_trades / total_trades if total_trades > 0 else 0
-        )
 
         profits = [t.get('pnl', 0) for t in closed_trades if t.get('pnl', 0) > 0]
         losses = [abs(t.get('pnl', 0)) for t in closed_trades if t.get('pnl', 0) < 0]
@@ -1262,7 +1665,8 @@ class UnifiedBacktestEngine:
             r_squared=perf_metrics.get("r_squared", 0.0),
             signals=[s.__dict__ for s in self._context.all_signals],
             orders=[o.__dict__ for o in self._context.all_orders],
-            fills=[f.__dict__ for f in self._context.all_fills],
+            fills=[f.__dict__ for f in all_fills_with_final],
+            trades=closed_trades,
             portfolio_daily=self._context.portfolio_daily,
         )
     

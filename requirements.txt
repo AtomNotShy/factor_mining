@@ -32,6 +32,7 @@ ccxt>=4.1.38
 yfinance>=0.2.24
 requests>=2.31.0
 aiohttp>=3.9.1
+httpx>=0.25.2  # HTTP 客户端，支持异步
 
 # 交易执行
 ib_insync>=0.9.86

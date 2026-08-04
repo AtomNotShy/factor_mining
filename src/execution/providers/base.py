@@ -181,10 +181,17 @@ class ExecutionProvider(ABC):
         self._current_prices.update(current_prices)
 
     def on_tick(self, ts: datetime, bars: Dict[str, Any]) -> List[Fill]:
-        """处理 tick 数据（兼容 SimulatedBroker 接口）- 返回已成交的订单"""
-        # 返回累积的 fills，但不清空，因为 engine 会在 _context.all_fills 中保存副本
+        """处理 tick 数据，更新价格并计算权益"""
+        # 更新当前价格（用于权益计算）
+        for symbol, bar in bars.items():
+            if isinstance(bar, dict) and 'close' in bar:
+                self._current_prices[symbol] = bar['close']
+
+        # 重新计算权益（使用最新价格）
+        self._update_equity()
+
+        # 返回累积的 fills
         fills = self._fills.copy()
-        # 不清空 self._fills，保留用于 get_fills() 等方法
         return fills
 
 
@@ -401,13 +408,18 @@ class SimulatedExecutionProvider(ExecutionProvider):
         self._update_portfolio(fill)
     
     def _update_equity(self) -> None:
-        """更新权益"""
+        """使用当前市价计算权益（修复Bug: 之前错误使用成本价导致资金泄漏）"""
         positions_value = sum(
-            abs(qty) * self._portfolio.avg_price.get(symbol, 0.0)
+            qty * self._current_prices.get(symbol, self._portfolio.avg_price.get(symbol, 0.0))
             for symbol, qty in self._portfolio.positions.items()
             if abs(qty) > 1e-8
         )
         self._portfolio.equity = self._portfolio.cash + positions_value
+
+    def update_current_prices(self, prices: Dict[str, float]) -> None:
+        """更新价格缓存并重新计算权益（每个tick调用）"""
+        self._current_prices.update(prices)
+        self._update_equity()
     
     async def cancel_order(self, order_id: str, reason: str = "") -> bool:
         """取消订单"""

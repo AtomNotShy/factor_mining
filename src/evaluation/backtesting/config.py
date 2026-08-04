@@ -22,10 +22,12 @@ class FeatureFlag(Flag):
     MULTI_TIMEFRAME = auto()
     DETAIL_TIMEFRAME = auto()
     SAVE_RESULTS = auto()
+    PORTFOLIO_SELECTION = auto()  # 启用组合选择钩子
     ALL = (
-        VECTORIZED | FREQTRADE_PROTOCOL | STOPLOSS_MANAGER | 
-        TRAILING_STOP | PROTECTIONS | EVENT_DRIVEN | 
-        MULTI_TIMEFRAME | DETAIL_TIMEFRAME | SAVE_RESULTS
+        VECTORIZED | FREQTRADE_PROTOCOL | STOPLOSS_MANAGER |
+        TRAILING_STOP | PROTECTIONS | EVENT_DRIVEN |
+        MULTI_TIMEFRAME | DETAIL_TIMEFRAME | SAVE_RESULTS |
+        PORTFOLIO_SELECTION
     )
 
 
@@ -146,6 +148,7 @@ class BacktestResult:
     signals: List[Dict[str, Any]] = field(default_factory=list)
     orders: List[Dict[str, Any]] = field(default_factory=list)
     fills: List[Dict[str, Any]] = field(default_factory=list)
+    trades: List[Dict[str, Any]] = field(default_factory=list)
     portfolio_daily: List[Dict] = field(default_factory=list)
     benchmark_symbol: str = ""
     benchmark_return: float = 0.0
@@ -189,5 +192,6 @@ class BacktestResult:
             "signals": self.signals,
             "orders": self.orders,
             "fills": self.fills,
+            "trades": self.trades,
             "portfolio_daily": self.portfolio_daily,
         }

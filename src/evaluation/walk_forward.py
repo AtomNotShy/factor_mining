@@ -15,7 +15,7 @@ import pandas as pd
 
 from src.core.context import RunContext, Environment
 from src.core.calendar import TradingCalendar
-from src.evaluation.backtesting.unified_engine import UnifiedBacktestEngine, UnifiedConfig, FeatureFlag
+from src.evaluation.backtesting.engine import UnifiedBacktestEngine, UnifiedConfig, FeatureFlag
 from src.evaluation.backtesting.config import TradeConfig, TimeConfig
 from src.strategies.base.strategy import Strategy
 from src.utils.logger import get_logger

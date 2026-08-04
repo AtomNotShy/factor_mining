@@ -16,7 +16,7 @@ import numpy as np
 
 from src.strategies import strategy_registry
 from src.strategies.base.strategy import Strategy, StrategyConfig
-from src.evaluation.backtesting.unified_engine import (
+from src.evaluation.backtesting.engine import (
     UnifiedBacktestEngine,
     UnifiedConfig,
     FeatureFlag,

@@ -18,6 +18,7 @@ Requires-Dist: loguru>=0.7.0
 Requires-Dist: typer>=0.9.0
 Provides-Extra: dev
 Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.21.0; extra == "dev"
 Requires-Dist: pytest-cov>=4.0.0; extra == "dev"
 Requires-Dist: black>=23.0.0; extra == "dev"
 Requires-Dist: flake8>=6.0.0; extra == "dev"
@@ -25,269 +26,393 @@ Requires-Dist: mypy>=1.0.0; extra == "dev"
 
 # Factor Mining System
 
-一个系统化的因子挖掘系统，为freqtrade量化交易策略提供数据驱动的决策支持。
+> 基于 Interactive Brokers 的美股 ETF 量化策略回测与实盘交易系统
 
-## 项目结构
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
+[![React + TypeScript](https://img.shields.io/badge/React-18-blue.svg)](https://react.dev/)
 
+## 📋 目录
+
+- [项目概述](#项目概述)
+- [✨ 主要特性](#-主要特性)
+- [🛠 技术栈](#-技术栈)
+- [🚀 快速开始](#-快速开始)
+- [📁 项目结构](#-项目结构)
+- [📖 文档](#-文档)
+- [📊 使用示例](#-使用示例)
+- [🧪 测试](#-测试)
+- [🤝 贡献指南](#-贡献指南)
+- [📄 许可证](#-许可证)
+
+## 项目概述
+
+Factor Mining System 是一个专业的量化交易因子挖掘与策略回测平台，支持：
+
+- **多数据源**：Interactive Brokers、Polygon、CCXT 等
+- **丰富因子库**：40+ 技术指标因子
+- **灵活策略系统**：Freqtrade 风格策略模板，支持 v2/v3 双模式
+- **统一事件驱动架构**：回测与实盘共用核心引擎
+- **完整回测评估**：双回测引擎 + 全面性能指标
+- **现代化 Web 界面**：React + TypeScript + Vite
+
+## ✨ 主要特性
+
+### 核心功能
+
+| 功能 | 描述 |
+|------|------|
+| **多时间框架** | 支持多时间框架分析 (1m, 5m, 1h, 1d, 1w) |
+| **因子研究** | 40+ 技术指标，支持自定义因子扩展 |
+| **策略模板** | RSI、MACD、布林带、随机指标、动量等 8 种模板 |
+| **事件驱动** | 统一事件流架构，确保回测确定性 |
+| **风险管理** | 完整风险检查、日亏损限制、最大回撤保护 |
+| **佣金模型** | 灵活的佣金、滑点、隔夜利息模型 |
+
+### 回测引擎
+
+- **UnifiedBacktestEngine**：统一事件驱动回测引擎
+- **FreqtradeBacktestEngine**：Freqtrade 风格回测引擎
+- 支持资金曲线、回撤、收益分布、月度热力图等可视化
+
+### 实盘交易
+
+- **Interactive Brokers** 集成
+- **模拟交易**模式
+- **Freqtrade 风格**交易协议
+
+## 🛠 技术栈
+
+### 后端
+
+| 技术 | 用途 |
+|------|------|
+| **Python 3.10+** | 主语言 |
+| **FastAPI** | Web 框架 |
+| **Pydantic** | 数据验证 |
+| **Pandas/NumPy** | 数据处理 |
+| **ib-insync** | IB 接口 |
+| **loguru** | 日志 |
+
+### 前端
+
+| 技术 | 用途 |
+|------|------|
+| **React 18** | UI 框架 |
+| **TypeScript** | 类型安全 |
+| **Vite** | 构建工具 |
+| **Tailwind CSS** | 样式框架 |
+| **Recharts** | 图表可视化 |
+| **Zustand** | 状态管理 |
+
+### 工具链
+
+- **Black** - 代码格式化 (line-length: 100)
+- **Flake8** - 代码检查
+- **MyPy** - 类型检查
+- **Pytest** - 单元测试
+- **Docker** - 容器化
+
+## 🚀 快速开始
+
+### 前置条件
+
+- Python 3.10+
+- Node.js 18+
+- pnpm (可选)
+
+### 1. 克隆项目
+
+```bash
+git clone <repository-url>
+cd factor_mining
 ```
-factor/
-├── src/
-│   ├── data/                   # 数据管理模块
-│   │   ├── collectors/         # 数据采集器
-│   │   ├── processors/         # 数据处理器
-│   │   └── storage/           # 数据存储
-│   ├── factors/               # 因子计算模块
-│   │   ├── base/              # 基础因子类
-│   │   ├── technical/         # 技术因子
-│   │   ├── fundamental/       # 基本面因子
-│   │   └── alternative/       # 另类因子
-│   ├── evaluation/            # 因子评估模块
-│   │   ├── metrics/           # 评估指标
-│   │   ├── backtesting/       # 回测引擎
-│   │   └── analysis/          # 分析工具
-│   ├── strategy/              # 策略生成模块
-│   │   ├── generators/        # 策略生成器
-│   │   └── freqtrade/         # freqtrade集成
-│   ├── api/                   # API接口
-│   │   ├── routers/           # 路由模块
-│   │   └── schemas/           # 数据模型
-│   ├── monitoring/            # 监控模块
-│   │   ├── alerts/            # 预警系统
-│   │   └── reports/           # 报告生成
-│   ├── config/                # 配置管理
-│   └── utils/                 # 工具函数
-├── frontend/                  # 前端界面
-├── tests/                     # 测试代码
-├── docs/                      # 文档
-├── scripts/                   # 脚本工具
-├── docker/                    # Docker配置
-└── requirements.txt           # Python依赖
-```
 
-## 快速开始
-
-### 方式一：直接运行
-
-#### 1. 环境准备
+### 2. 安装后端依赖
 
 ```bash
 # 创建虚拟环境
-python3 -m venv venv
-source venv/bin/activate  # Linux/Mac
-# 或 venv\Scripts\activate  # Windows
+python3 -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+# 或 .venv\Scripts\activate  # Windows
 
 # 安装依赖
 pip install -r requirements.txt
+pip install -e ".[dev]"  # 安装开发依赖
 ```
 
-可选（机器学习相关）：
+### 3. 安装前端依赖
 
 ```bash
-pip install -r requirements-ml.txt
+cd frontend
+pnpm install
 ```
 
-macOS/arm64 若安装 `lightgbm` 失败，建议优先用 Docker 运行；或改用 conda-forge 安装 `lightgbm`。
-
-#### 2. 启动服务
+### 4. 配置环境变量
 
 ```bash
-# 直接启动（使用默认配置）
-python3 run.py
+# 复制环境变量模板
+cp .env.example .env
 
-# 或者使用uvicorn启动
-python3 -m uvicorn src.api.main:app --reload --port 8000
+# 编辑配置
+# 主要配置项：
+# - IB__HOST: IB Gateway/TWS 主机地址
+# - IB__PORT: IB 端口
+# - IB__CLIENT_ID: 客户端 ID
 ```
 
-#### 3. 访问系统
+### 5. 启动服务
 
-- API文档: http://localhost:8000/docs
-- 系统健康检查: http://localhost:8000/health
-
-### 方式二：Docker Compose（推荐）
+**后端服务：**
 
 ```bash
-# 启动完整系统（包括数据库、缓存等）
-docker-compose up -d
+# 开发模式 (自动重载)
+uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
 
-# 查看日志
-docker-compose logs -f factor-mining
-
-# 停止服务
-docker-compose down
+# 或使用 Python 模块
+python3 -m src.api.main
 ```
 
-启动后可访问：
-- 因子挖掘API: http://localhost:8000/docs
-- Grafana监控: http://localhost:3000 (admin/admin)
-
-### 方式三：单独Docker
+**前端服务：**
 
 ```bash
-# 构建镜像
-docker build -t factor-mining .
-
-# 运行容器
-docker run -p 8000:8000 factor-mining
+cd frontend
+pnpm dev
 ```
 
-## 功能特性
+访问 http://localhost:3000 查看前端界面，API 服务在 http://localhost:8000。
 
-### 📊 数据采集
-- ✅ 多交易所数据采集 (Binance, OKX)
-- ✅ 美股/ETF 数据采集 (Polygon，支持本地Parquet缓存)
-- ✅ 实时市场数据获取
-- ✅ 历史数据回填
-- ✅ 数据质量检查
-
-### 🧮 因子计算
-- ✅ 40+ 技术因子库
-  - 动量类因子 (10+): 价格动量、RSI动量、MACD动量等
-  - 波动率因子 (10+): 历史波动率、ATR、GARCH波动率等
-  - 反转类因子 (10+): 短期反转、RSI反转、布林带反转等
-- ✅ 自定义因子开发框架
-- ✅ 因子批量计算API
-
-### 📈 因子评估
-- ✅ IC分析 (信息系数)
-- ✅ 因子回测引擎
-- ✅ 分层回测分析
-- ✅ 多空组合构建
-- ✅ 性能指标计算
-- ✅ 因子排名系统
-
-### 🎯 策略生成
-- ✅ freqtrade策略生成
-- ✅ 实时监控预警
-- ✅ 可视化分析界面
-
-## 使用示例
-
-### 1. 本地测试
+### 6. 运行示例
 
 ```bash
-# 运行基础功能测试
-python3 examples/simple_test.py
+# 策略模板演示
+python3 examples/strategy_template_demo.py
 
-# 运行API客户端测试（需要先启动服务）
-python3 examples/api_client_demo.py
-
-# 运行SPY 1分钟 VWAP 回踩策略示例回测（需要配置 POLYGON_API_KEY）
-python3 examples/vwap_pullback_spy_backtest.py
-
-# 分析 SPY 近4个月因子 IC 表现（需要配置 POLYGON_API_KEY）
-python3 examples/spy_factor_ic_4m.py
+# Freqtrade 回测演示
+python3 examples/freqtrade_backtest_demo.py
 ```
 
-### 2. API使用示例
+## 📁 项目结构
+
+```
+factor_mining/
+├── src/                          # Python 后端
+│   ├── api/                      # FastAPI 路由
+│   │   └── routers/              # API 端点 (7个模块)
+│   ├── config/                   # Pydantic 配置
+│   ├── core/                     # 核心类型和状态
+│   │   ├── types.py              # Signal, Order, PortfolioState
+│   │   ├── calendar.py           # 交易日历
+│   │   ├── context.py            # 运行上下文
+│   │   ├── risk_manager.py       # 风险管理
+│   │   └── state_machine.py      # 状态机
+│   ├── data/                     # 数据层
+│   │   ├── collectors/           # 数据采集器 (IB, Polygon, CCXT)
+│   │   ├── storage/              # 数据存储 (Parquet, SQLite)
+│   │   └── adapter/              # 数据适配器
+│   ├── evaluation/               # 评估层
+│   │   ├── backtesting/          # 回测引擎
+│   │   │   ├── engine.py # 统一回测引擎
+│   │   │   ├── freqtrade_engine.py
+│   │   │   └── report.py         # 报告生成
+│   │   └── metrics/              # 性能指标
+│   ├── execution/                # 执行层
+│   │   ├── order_engine.py       # 订单引擎
+│   │   └── providers/            # 执行提供者 (IB, 模拟)
+│   ├── factors/                  # 因子库
+│   │   └── technical/            # 技术因子 (40+)
+│   ├── strategies/               # 策略系统
+│   │   ├── base/                 # 策略基类
+│   │   │   ├── strategy.py       # Strategy 基类
+│   │   │   ├── freqtrade_interface.py
+│   │   │   └── templates.py      # 策略模板
+│   │   ├── example/              # 示例策略
+│   │   └── user_strategies/      # 用户策略
+│   └── utils/                    # 工具函数
+│       └── logger.py             # 日志
+│
+├── frontend/                     # React 前端
+│   └── src/
+│       ├── components/           # 组件
+│       │   ├── charts/           # 图表组件
+│       │   └── tradingview/      # 交易视图
+│       ├── pages/                # 页面
+│       │   ├── Dashboard.tsx     # 仪表盘
+│       │   ├── Backtest.tsx      # 回测页面
+│       │   ├── History.tsx       # 历史记录
+│       │   ├── Monitoring.tsx    # 监控
+│       │   └── Settings.tsx      # 设置
+│       ├── services/             # API 服务
+│       ├── stores/               # 状态管理
+│       └── i18n/                 # 国际化
+│
+├── examples/                     # 示例脚本
+├── tests/                        # 测试用例
+├── docs/                         # 文档
+├── data/                         # 数据缓存
+├── reports/                      # 回测报告
+├── logs/                         # 日志文件
+│
+├── pyproject.toml               # Python 项目配置
+├── requirements.txt             # 依赖列表
+├── frontend/package.json        # 前端依赖
+├── docker-compose.yml           # Docker 配置
+└── README.md                    # 本文件
+```
+
+## 📖 文档
+
+| 文档 | 描述 |
+|------|------|
+| [AGENTS.md](AGENTS.md) | 开发指南、代码规范、构建命令 |
+| [docs/策略系统使用指南.md](docs/策略系统使用指南.md) | 策略系统详细用法 |
+| [docs/策略回测CLI使用指南.md](docs/策略回测CLI使用指南.md) | CLI 回测指南 |
+| [docs/策略回测Web界面使用指南.md](docs/策略回测Web界面使用指南.md) | Web 界面使用指南 |
+| [docs/回测系统使用说明.md](docs/回测系统使用说明.md) | 回测系统说明 |
+| [docs/批量因子测试使用指南.md](docs/批量因子测试使用指南.md) | 因子测试指南 |
+| [docs/新增策略开发指南.md](docs/新增策略开发指南.md) | 新策略开发指南 |
+| [docs/unified_event_driven_architecture.md](docs/unified_event_driven_architecture.md) | 事件驱动架构设计 |
+| [frontend/README.md](frontend/README.md) | 前端开发指南 |
+
+## 📊 使用示例
+
+### 策略模板使用
 
 ```python
-import aiohttp
+from src.strategies.base.templates import RSIStrategy
+
+class MyRSIStrategy(RSIStrategy):
+    strategy_name = "My RSI Strategy"
+    rsi_period = 14
+    rsi_overbought = 70
+    rsi_oversold = 30
+```
+
+### 统一回测引擎
+
+```python
 import asyncio
+from datetime import date
+from src.evaluation.backtesting.engine import UnifiedBacktestEngine, UnifiedConfig, TradeConfig
+from src.strategies.user_strategies import USETFMomentumStrategy
 
-async def get_factor_data():
-    async with aiohttp.ClientSession() as session:
-        # 获取因子列表
-        async with session.get("http://localhost:8000/api/v1/factors/list") as resp:
-            factors = await resp.json()
-            print(f"可用因子: {factors['count']} 个")
-        
-        # 计算动量因子
-        params = {"symbol": "BTC/USDT", "timeframe": "1h", "limit": 100}
-        async with session.post(
-            "http://localhost:8000/api/v1/factors/calculate/momentum_20",
-            params=params
-        ) as resp:
-            result = await resp.json()
-            print(f"动量因子计算结果: {result['statistics']}")
+async def run_backtest():
+    strategy = USETFMomentumStrategy()
+    config = UnifiedConfig(
+        trade=TradeConfig(
+            initial_capital=100000,
+            commission_rate=0.001,
+            slippage_rate=0.0005,
+        ),
+    )
+    engine = UnifiedBacktestEngine(config=config)
 
-asyncio.run(get_factor_data())
+    await engine.run(
+        strategies=[strategy],
+        universe=["SPY", "QQQ", "TLT"],
+        start=date(2024, 1, 1),
+        end=date(2024, 12, 31),
+    )
+
+asyncio.run(run_backtest())
 ```
 
-### 3. 获取市场数据
-
-```bash
-# 使用curl获取BTC/USDT数据
-curl -X POST "http://localhost:8000/api/v1/data/ohlcv" \
-     -H "Content-Type: application/json" \
-     -d '{"symbol": "BTC/USDT", "timeframe": "1h", "limit": 50}'
-```
-
-### 4. 获取美股/ETF数据（Polygon，本地缓存）
-
-先设置环境变量 `POLYGON_API_KEY`，然后：
-
-```bash
-curl -X POST "http://localhost:8000/api/v1/data/polygon/ohlcv" \
-     -H "Content-Type: application/json" \
-     -d '{"symbol": "AAPL", "timeframe": "1m", "limit": 500}'
-```
-
-数据会缓存到 `data/polygon/ohlcv/`（Docker Compose 已挂载 `./data:/app/data`，可持久化）。
-
-## 项目结构说明
-
-- `src/data/` - 数据采集和处理模块
-- `src/factors/` - 因子计算模块，包含各种因子算法
-- `src/api/` - RESTful API接口
-- `src/config/` - 配置管理
-- `src/utils/` - 工具函数
-- `examples/` - 使用示例和测试脚本
-- `docker/` - Docker相关配置
-
-## 开发指南
-
-### 添加新因子
-
-1. 在 `src/factors/technical/` 中创建新的因子文件
-2. 继承 `TechnicalFactor` 基类
-3. 实现 `calculate` 方法
-4. 在模块末尾注册因子
+### Freqtrade 风格策略
 
 ```python
-from src.factors.base.factor import TechnicalFactor, FactorMetadata, factor_registry
+import pandas as pd
+from src.strategies.base.freqtrade_interface import FreqtradeStrategy
+from src.strategies.base.lifecycle import FreqtradeLifecycleMixin
 
-class MyCustomFactor(TechnicalFactor):
-    def __init__(self):
-        metadata = FactorMetadata(
-            name="my_custom_factor",
-            description="我的自定义因子",
-            category="technical",
-            sub_category="custom",
-            calculation_window=20,
-            update_frequency="1d",
-            data_requirements=["close"],
-        )
-        super().__init__(metadata)
-    
-    def calculate(self, data, **kwargs):
-        # 实现因子计算逻辑
-        return data['close'].pct_change()
+class MyFreqtradeStrategy(FreqtradeStrategy, FreqtradeLifecycleMixin):
+    strategy_name = "My Freqtrade Strategy"
+    strategy_id = "my_freqtrade"
+    timeframe = "1d"
+    stoploss = -0.10
+    trailing_stop = False
+    minimal_roi = {0: 0.02, "60": 0.01}
 
-# 注册因子
-factor_registry.register(MyCustomFactor())
+    def populate_indicators(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
+        # 计算指标
+        return dataframe
+
+    def populate_entry_trend(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
+        dataframe['enter_long'] = False
+        dataframe['enter_tag'] = ''
+        return dataframe
+
+    def populate_exit_trend(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
+        dataframe['exit_long'] = False
+        dataframe['exit_tag'] = ''
+        return dataframe
 ```
 
-### 配置环境变量
+## 🧪 测试
 
-系统支持通过环境变量进行配置：
+### 运行所有测试
 
 ```bash
-# 数据库配置
-export DB_HOST=
-export DB_PORT=
-export DB_USERNAME=
-export DB_PASSWORD=
-
-# 交易所API配置
-export EXCHANGE_BINANCE_API_KEY=
-export EXCHANGE_BINANCE_SECRET=
-
-# API服务配置
-export API_HOST=0.0.0.0
-export API_PORT=8000
-export API_DEBUG=false
+pytest tests/ -v
 ```
 
-## 许可证
+### 运行特定测试
 
-MIT License # factor_mining
+```bash
+pytest tests/test_informative.py                # 单个文件
+pytest tests/test_informative.py::TestClass     # 单个类
+pytest tests/test_informative.py::TestClass::test_method  # 单个测试
+```
+
+### 带覆盖率测试
+
+```bash
+pytest --cov=src --cov-report=term-missing
+```
+
+### 代码质量检查
+
+```bash
+black src/ && flake8 src/ && mypy src/
+```
+
+## 🤝 贡献指南
+
+### 代码规范
+
+- **Python**: 遵循 [AGENTS.md](AGENTS.md) 中的代码风格指南
+- **Imports**: Standard library → Third-party → Local
+- **Line length**: 100 字符
+- **类型注解**: 所有函数和变量必须标注类型
+- **错误处理**: 禁止 bare `except:`，捕获具体异常
+- **日志**: 使用 `logger` 而非 `print()`
+
+### 提交规范
+
+- feat: 新功能
+- fix: Bug 修复
+- docs: 文档更新
+- style: 代码格式调整
+- refactor: 重构
+- test: 测试相关
+- chore: 构建或辅助工具变动
+
+### 开发流程
+
+1. Fork 项目
+2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
+3. 提交更改 (`git commit -m 'feat: add amazing feature'`)
+4. 推送分支 (`git push origin feature/amazing-feature`)
+5. 发起 Pull Request
+
+## 📄 许可证
+
+本项目采用 MIT 许可证，详见 [LICENSE](LICENSE) 文件。
+
+---
+
+## 🙏 致谢
+
+- [Freqtrade](https://www.freqtrade.io/) - 策略系统和回测引擎的设计参考
+- [pandas](https://pandas.pydata.org/) - 数据处理
+- [FastAPI](https://fastapi.tiangolo.com/) - Web 框架
+- [React](https://react.dev/) - 前端框架

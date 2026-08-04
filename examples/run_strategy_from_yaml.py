@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.strategies.user_strategies.etf_momentum_rotation import ETFMomentumRotationStrategy
-from src.evaluation.backtesting.unified_engine import UnifiedBacktestEngine
+from src.evaluation.backtesting.engine import UnifiedBacktestEngine
 from src.evaluation.backtesting.config import (
     UnifiedConfig,
     TradeConfig,

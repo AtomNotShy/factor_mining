@@ -6,7 +6,7 @@
 import asyncio
 from datetime import date
 from src.strategies.user_strategies.etf_momentum_joinquant import ETFMomentumJoinQuantStrategy
-from src.evaluation.backtesting.unified_engine import UnifiedBacktestEngine
+from src.evaluation.backtesting.engine import UnifiedBacktestEngine
 from src.evaluation.backtesting.config import UnifiedConfig, TradeConfig, TimeConfig, FeatureFlag
 
 async def test_etf_momentum():

@@ -187,7 +187,7 @@ class TestBacktestContext:
     """BacktestContext 测试类"""
     
     def test_context_creation(self):
-        from src.evaluation.backtesting.unified_engine import BacktestContext
+        from src.evaluation.backtesting.engine import BacktestContext
         
         ctx = BacktestContext(
             run_id="test-123",
@@ -202,7 +202,7 @@ class TestBacktestContext:
         assert ctx.portfolio_daily == []
     
     def test_context_defaults(self):
-        from src.evaluation.backtesting.unified_engine import BacktestContext
+        from src.evaluation.backtesting.engine import BacktestContext
         
         ctx = BacktestContext()
         

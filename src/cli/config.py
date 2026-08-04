@@ -105,6 +105,8 @@ def merge_config(
                 startup_candle_count=200,
                 universe=[],
                 benchmark_symbol="SPY",
+                auto_download=cli_args.auto_download if cli_args.auto_download is not None else True,
+                provider="auto",
             ),
             strategy=StrategyConfigSchema(
                 name=cli_args.strategy or "VectorizedRSISignal",
@@ -124,6 +126,9 @@ def merge_config(
 
         if cli_args.slippage is not None:
             config.broker.slippage = cli_args.slippage
+
+        if cli_args.auto_download is not None:
+            config.data.auto_download = cli_args.auto_download
 
         if cli_args.symbols:
             symbols = [s.strip().upper() for s in cli_args.symbols.split(",") if s.strip()]

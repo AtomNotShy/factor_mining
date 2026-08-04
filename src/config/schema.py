@@ -3,7 +3,7 @@
 使用 Pydantic 进行强类型验证
 """
 
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Literal
 from pydantic import BaseModel, Field
 
 class TradingConfig(BaseModel):
@@ -35,6 +35,19 @@ class DataConfig(BaseModel):
     startup_candle_count: int = Field(200, description="预热数据量 (用于计算 MA 等指标)")
     universe: List[str] = Field(default_factory=list, description="股票池")
     benchmark_symbol: str = Field("SPY", description="基准指标标的")
+    timeframes: List[str] = Field(default_factory=list, description="时间框架列表(主时间框架在前)")
+    auto_download: bool = Field(True, description="缺数据时是否自动下载")
+    provider: str = Field("auto", description="数据源偏好 (auto/ib/polygon/alpaca)")
+
+
+class TimeConfigSchema(BaseModel):
+    """回测时间框架配置"""
+    signal_timeframe: Optional[str] = Field(default=None, description="信号时间框架")
+    execution_timeframe: Optional[str] = Field(default=None, description="执行时间框架")
+    informative_timeframes: List[str] = Field(default_factory=list, description="辅助时间框架")
+    detail_timeframe: Optional[str] = Field(default=None, description="明细时间框架")
+    clock_mode: Optional[Literal["daily", "bar", "hybrid"]] = Field(default=None, description="时钟模式")
+    execution_time: Optional[str] = Field(default=None, description="执行时间(HH:MM)")
 
 class StrategyConfigSchema(BaseModel):
     """策略相关配置"""
@@ -53,6 +66,7 @@ class ConfigSchema(BaseModel):
     risk: RiskConfig
     data: DataConfig
     strategy: StrategyConfigSchema
+    time: Optional[TimeConfigSchema] = Field(default=None, description="时间框架配置")
     time_range: Optional[TimeRangeConfig] = Field(default=None, description="回测时间范围")
     
     @classmethod

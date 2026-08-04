@@ -187,6 +187,14 @@ class BacktestStore:
                     total_return=0.0,
                 )
 
+            # 提取胜率 - 数据在根级别，字段名是 win_rate_pct（百分比形式，如 52.96）
+            # 兼容 win_rate（小数形式，如 0.5296）
+            win_rate_raw = backtest_result.get('win_rate_pct') or backtest_result.get('win_rate', 0)
+            win_rate = safe_f(win_rate_raw)
+            # 如果 win_rate_pct 是百分比形式（大于1），转换为小数
+            if win_rate > 1:
+                win_rate = win_rate / 100.0
+
             record = BacktestRecord(
                 id=backtest_id,
                 strategy_name=backtest_result.get('strategy_name', ''),
@@ -200,9 +208,9 @@ class BacktestStore:
                 sharpe_ratio=sharpe_val,
                 max_drawdown=max_dd_val,
                 total_trades=total_trades_val,
-                win_rate=safe_f(backtest_result.get('win_rate', 0)),
+                win_rate=win_rate,
             )
-            
+
             # 保存完整结果
             result_file = self._get_result_file(backtest_id)
             with open(result_file, 'w', encoding='utf-8') as f:

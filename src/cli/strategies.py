@@ -36,6 +36,13 @@ def register_freqtrade_strategies() -> None:
     except ImportError:
         pass
 
+    try:
+        from src.strategies.user_strategies.joinquant_etf_rotation_intraday import JoinQuantETFRotationIntradayStrategy
+        _freqtrade_strategy_registry['joinquant_etf_rotation_intraday'] = JoinQuantETFRotationIntradayStrategy
+        _freqtrade_strategy_registry['etf_rotation_intraday'] = JoinQuantETFRotationIntradayStrategy
+    except ImportError:
+        pass
+
 
 def get_strategy_class(strategy_name: str) -> Optional[Type]:
     """获取策略类 - 支持多种名称格式"""

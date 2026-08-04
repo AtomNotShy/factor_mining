@@ -80,6 +80,17 @@ def load_local_ohlcv(
 
     candidates: List[Tuple[LocalBarsSource, Path]] = []
 
+    # 0) 统一 bars 目录（优先级最高）：data/bars/{symbol}/{timeframe}/data.parquet
+    candidates.append(
+        (
+            LocalBarsSource(
+                path=str(root / "bars" / symbol_u / tf / "data.parquet"),
+                kind="bars_unified",
+            ),
+            root / "bars" / symbol_u / tf / "data.parquet",
+        )
+    )
+
     # 1) IBCollector 缓存位置：data/ib/ohlcv/{timeframe}/{symbol}.parquet
     candidates.append(
         (

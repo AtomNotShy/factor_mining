@@ -13,8 +13,10 @@ from typing import List, Optional, Tuple, Any
 from pathlib import Path
 
 from src.data.storage.local_bars import load_local_ohlcv
+from src.data.storage.parquet_store import ParquetDataFrameStore
 from src.data.collectors.ib_history import IBHistoryCollector
 from src.data.collectors.polygon import PolygonCollector
+from src.data.collectors.alpaca import AlpacaCollector
 from src.config.settings import get_settings
 from src.utils.logger import get_logger
 
@@ -37,8 +39,10 @@ class UnifiedDataManager:
     def __init__(self):
         self.settings = get_settings()
         self.data_dir = Path(self.settings.storage.data_dir)
+        self.store = ParquetDataFrameStore(str(self.data_dir))
         self._ib_collector: Optional[IBHistoryCollector] = None
         self._polygon_collector: Optional[PolygonCollector] = None
+        self._alpaca_collector: Optional[AlpacaCollector] = None
 
     def _get_polygon_collector(self) -> Optional[PolygonCollector]:
         """获取 Polygon 采集器（如果已配置）"""
@@ -49,6 +53,16 @@ class UnifiedDataManager:
             else:
                 logger.debug("Polygon API Key 未配置，跳过 Polygon 数据源")
         return self._polygon_collector
+
+    def _get_alpaca_collector(self) -> Optional[AlpacaCollector]:
+        """获取 Alpaca 采集器（如果已配置）"""
+        if self._alpaca_collector is None:
+            if self.settings.alpaca.api_key and self.settings.alpaca.secret_key:
+                self._alpaca_collector = AlpacaCollector()
+                logger.info("AlpacaCollector 已初始化 (ALPACA_API_KEY 已配置)")
+            else:
+                logger.debug("Alpaca API Key 未配置，跳过 Alpaca 数据源")
+        return self._alpaca_collector
 
     def _get_ib_collector(self) -> IBHistoryCollector:
         """延迟初始化 IB 采集器"""
@@ -145,12 +159,39 @@ class UnifiedDataManager:
     def _get_best_collector(
         self,
         symbol: str,
-        timeframe: str = "1d",
+        timeframe: str,
         source_preference: str = "auto",
     ) -> Tuple[Optional[object], str]:
-        """获取最佳可用的数据采集器"""
+        """获取最佳可用的数据采集器（支持 Alpaca 作为默认自动下载源）"""
+        # 优先级控制：alpaca > polygon > ib
+        if source_preference == "alpaca":
+            alpaca = self._get_alpaca_collector()
+            if alpaca is not None:
+                return alpaca, "alpaca"
+            # 回退到其他源
+            polygon = self._get_polygon_collector()
+            if polygon is not None:
+                return polygon, "polygon"
+            return self._get_ib_collector(), "ib"
+
         if source_preference == "ib":
             return self._get_ib_collector(), "ib"
+        if source_preference == "polygon":
+            polygon = self._get_polygon_collector()
+            if polygon is not None:
+                return polygon, "polygon"
+            return self._get_ib_collector(), "ib"
+
+        # source_preference == "auto": 优先 Alpaca（免费、稳定），其次 Polygon，最后 IB
+        alpaca = self._get_alpaca_collector()
+        if alpaca is not None:
+            return alpaca, "alpaca"
+
+        polygon = self._get_polygon_collector()
+        if polygon is not None:
+            return polygon, "polygon"
+
+        return self._get_ib_collector(), "ib"
         if source_preference == "polygon":
             polygon = self._get_polygon_collector()
             if polygon is not None:
@@ -319,6 +360,34 @@ class UnifiedDataManager:
                         download_start=download_start,
                         download_end=download_end
                     )
+                elif source_name == "alpaca" and isinstance(collector, AlpacaCollector):
+                    # Alpaca 采集器
+                    await collector.connect()
+
+                    if is_missing:
+                        logger.info(f"本地数据为空，使用 Alpaca 全量下载 [{symbol}] 从 {start} 到 {end}...")
+                        new_df = await collector.get_ohlcv(
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            since=start,
+                        )
+                    elif missing_dates or missing_start:
+                        logger.info(
+                            f"检测到缺失数据，使用 Alpaca 补齐 [{symbol}] 从 {download_start} 到 {download_end}..."
+                        )
+                        new_df = await collector.get_ohlcv(
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            since=download_start,
+                        )
+                    else:
+                        logger.info(f"本地数据存在但不全，使用 Alpaca 执行增量更新 [{symbol}]...")
+                        new_df = await collector.get_ohlcv(
+                            symbol=symbol,
+                            timeframe=timeframe,
+                        )
+
+                    await collector.disconnect()
                 else:
                     # IB 采集器
                     ib_collector = self._get_ib_collector()
@@ -352,6 +421,12 @@ class UnifiedDataManager:
                         await ib_collector.disconnect()
 
                 if new_df is not None and not new_df.empty:
+                    # 只有 IB 采集器需要同步到统一目录（Alpaca/Polygon 已直接写入）
+                    if source_name == "ib":
+                        unified_path = f"bars/{symbol.upper()}/{timeframe}/data.parquet"
+                        self.store.write(unified_path, new_df)
+                        logger.info(f"✅ {symbol} 数据已保存到统一目录: {unified_path}")
+
                     df_full, _ = load_local_ohlcv(
                         data_dir=self.data_dir,
                         symbol=symbol,

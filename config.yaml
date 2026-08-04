@@ -16,73 +16,83 @@
 # ============================================================================
 
 trading:
-  stake_amount: 10000        # 每次投入金额
-  max_open_trades: 1         # 最大同时持仓数（强制单仓位）
-  position_size: 1.0         # 仓位比例（100%用于单仓位）
-  timeframe: "1d"            # 基准时间框架
-  dry_run: true              # 模拟运行模式
+  stake_amount: 10000 # 每次投入金额
+  max_open_trades: 1 # 最大同时持仓数（强制单仓位）
+  position_size: 1.0 # 仓位比例（100%用于单仓位）
+  timeframe: "1d" # 基准时间框架
+  dry_run: true # 模拟运行模式
 
 # ============================================================================
 # 券商配置
 # ============================================================================
 
 broker:
-  name: "simulated"          # 券商名称
-  commission: 0.001          # 手续费率 (0.1%)
-  slippage: 0.0005           # 滑点率 (0.05%)
+  name: "simulated" # 券商名称
+  commission: 0.001 # 手续费率 (0.1%)
+  slippage: 0.0005 # 滑点率 (0.05%)
 
 # ============================================================================
 # 风控配置
 # ============================================================================
 
 risk:
-  stoploss: -0.10            # 固定止损 (-10%)
-  trailing_stop: false       # 是否开启移动止损
+  stoploss: -0.10 # 固定止损 (-10%)
+  trailing_stop: false # 是否开启移动止损
   trailing_stop_positive: null
   trailing_stop_positive_offset: 0.0
-  roi_table: {}              # ROI对照表 (空表示不使用)
-  max_open_trades: 1         # 最大同时持仓数
+  roi_table: {} # ROI对照表 (空表示不使用)
+  max_open_trades: 1 # 最大同时持仓数
 
 # ============================================================================
 # 数据配置
 # ============================================================================
 
 data:
-  datadir: "./data"          # 数据存储目录
-  startup_candle_count: 50   # 预热数据量（减少以加快启动）
-  universe:                  # ETF池（美股主流ETF）
-    - "SPY"                  # 标普500 ETF
-    - "QQQ"                  # 纳斯达克100 ETF
-    - "IWM"                  # 罗素2000 ETF
-    - "DIA"                  # 道琼斯ETF
-    - "EEM"                  # 新兴市场ETF
-    - "VWO"                  # 新兴市场ETF (Vanguard)
-    - "VEA"                  # 发达市场ETF
-    - "GLD"                  # 黄金ETF
-    - "USO"                  # 原油ETF
-    - "TLT"                  # 20年+国债ETF
-    - "BND"                  # 全债券ETF
-  benchmark_symbol: "SPY"    # 基准指标标的
+  datadir: "./data" # 数据存储目录
+  startup_candle_count: 260 # 预热数据量（聚宽策略需要260天）
+  auto_download: true # 缺数据自动下载
+  provider: "auto" # 数据源偏好 (auto/ib/polygon/alpaca)
+  # 盘中价格策略需要多时间框架
+  timeframes:
+    - "1m" # 盘中数据（用于提取9:50价格）
+    - "1d" # 日线数据（用于计算动量）
+  universe: # 聚宽ETF轮动策略的15个ETF池
+    - "SPY" # S&P 500 ETF
+    - "QQQ" # Nasdaq 100 ETF
+    - "IWM" # Russell 2000 ETF
+    - "TLT" # 20+ Year Treasury Bond ETF
+    - "GLD" # Gold ETF
+    - "USO" # Oil ETF
+    - "VNQ" # Real Estate ETF
+    - "XLF" # Financial Sector ETF
+    - "XLE" # Energy Sector ETF
+    - "XLK" # Technology Sector ETF
+    - "XLV" # Healthcare Sector ETF
+    - "XLI" # Industrial Sector ETF
+    - "XLP" # Consumer Staples Sector ETF
+    - "XLY" # Consumer Discretionary Sector ETF
+    - "XLU" # Utilities Sector ETF
+  benchmark_symbol: "SPY" # 基准指标标的
 
 # ============================================================================
 # 策略配置
 # ============================================================================
 
 strategy:
-  name: "us_etf_joinquant_rotation"    # 策略ID
-  params:                    # 策略参数
-    min_days: 10             # 最小回溯天数（降低以提高灵敏度）
-    max_days: 40             # 最大回溯天数（降低以加快响应）
-    stoploss: -0.10          # 止损比例
-    premium_rate_threshold: 5.0   # 溢价率阈值 (%)
-    drop_threshold: 0.95     # 单日跌幅阈值 (5%)
-    target_positions: 1      # 目标持仓数量
-    score_min: 0.5           # 最小有效得分（提高以过滤弱信号）
+  name: "joinquant_etf_rotation_intraday" # 策略ID
+  params: # 策略参数
+    min_days: 10 # 最小回溯天数（降低以提高灵敏度）
+    max_days: 40 # 最大回溯天数（降低以加快响应）
+    stoploss: -0.10 # 止损比例
+    premium_rate_threshold: 5.0 # 溢价率阈值 (%)
+    drop_threshold: 0.95 # 单日跌幅阈值 (5%)
+    target_positions: 1 # 目标持仓数量
+    score_min: 0.5 # 最小有效得分（提高以过滤弱信号）
 
 # ============================================================================
 # 回测时间范围
 # ============================================================================
 
 time_range:
-  start: "2025-01-01"        # 开始日期
-  end: "2025-12-31"          # 结束日期
+  start: "2024-12-01" # 开始日期
+  end: "2025-12-31" # 结束日期

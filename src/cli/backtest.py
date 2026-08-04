@@ -18,12 +18,27 @@ from src.core.context import RunContext, Environment
 from src.core.calendar import TradingCalendar
 from src.data.storage.backtest_store import BacktestStore
 from src.evaluation.backtesting import BacktestResult
-from src.evaluation.backtesting.config import TradeConfig
-from src.evaluation.backtesting.unified_engine import UnifiedBacktestEngine, UnifiedConfig, FeatureFlag
+from src.evaluation.backtesting.config import TradeConfig, TimeConfig
+from src.evaluation.backtesting.engine import UnifiedBacktestEngine, UnifiedConfig, FeatureFlag
 from src.utils.cli_printer import CLIPrinter
 from src.utils.logger import get_logger
 
 logger = get_logger("cli.backtest")
+
+
+def _decimal_time_to_hhmm(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        hours = int(value)
+        minutes = int(round((value - hours) * 60))
+        if minutes >= 60:
+            hours += 1
+            minutes = 0
+        return f"{hours:02d}:{minutes:02d}"
+    if isinstance(value, str) and ":" in value:
+        return value
+    return None
 
 
 def check_data_range(universe: List[str], start_date: date, end_date: date) -> Optional[str]:
@@ -123,13 +138,60 @@ async def run_backtest(args: argparse.Namespace) -> int:
     ctx.now_utc = datetime.now(timezone.utc)
 
     # 7. 运行回测
+    time_overrides = config.time if config else None
+    data_timeframes = merged_config.data.timeframes or []
+    signal_tf = (
+        time_overrides.signal_timeframe
+        if time_overrides and time_overrides.signal_timeframe
+        else (data_timeframes[0] if data_timeframes else merged_config.trading.timeframe)
+    )
+    execution_tf = (
+        time_overrides.execution_timeframe
+        if time_overrides and time_overrides.execution_timeframe
+        else signal_tf
+    )
+    informative_tfs = (
+        time_overrides.informative_timeframes
+        if time_overrides and time_overrides.informative_timeframes
+        else data_timeframes[1:]
+    )
+    detail_tf = time_overrides.detail_timeframe if time_overrides else None
+    clock_mode = (
+        time_overrides.clock_mode
+        if time_overrides and time_overrides.clock_mode
+        else ("bar" if signal_tf.endswith(("m", "h")) else "daily")
+    )
+    execution_time = time_overrides.execution_time if time_overrides else None
+
+    informative_tfs = [tf for tf in informative_tfs if tf not in {signal_tf, execution_tf}]
+
+    if execution_time is None and signal_tf.endswith("m") and hasattr(strategy, "intraday_time"):
+        param = getattr(strategy, "intraday_time")
+        execution_time = _decimal_time_to_hhmm(
+            getattr(param, "value", param)
+        )
+        if execution_time:
+            clock_mode = "hybrid"
+
+    time_config = TimeConfig(
+        signal_timeframe=signal_tf,
+        execution_timeframe=execution_tf,
+        informative_timeframes=informative_tfs,
+        detail_timeframe=detail_tf,
+        clock_mode=clock_mode,
+        execution_time=execution_time,
+        warmup_days=merged_config.data.startup_candle_count,
+    )
+    features = FeatureFlag.ALL
+
     engine_config = UnifiedConfig(
         trade=TradeConfig(
             initial_capital=merged_config.trading.stake_amount,
             commission_rate=merged_config.broker.commission,
             slippage_rate=merged_config.broker.slippage,
         ),
-        features=FeatureFlag.ALL,
+        time=time_config,
+        features=features,
     )
     engine = UnifiedBacktestEngine(config=engine_config)
 

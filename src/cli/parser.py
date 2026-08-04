@@ -59,11 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     # 数据参数
     bt_parser.add_argument(
-        "--auto-download", dest="auto_download", action="store_true", default=True,
-        help="自动补齐数据（默认开启）"
+        "--auto-download", dest="auto_download", action="store_true", default=None,
+        help="自动补齐数据"
     )
     bt_parser.add_argument(
-        "--no-auto-download", dest="auto_download", action="store_false",
+        "--no-auto-download", dest="auto_download", action="store_false", default=None,
         help="关闭自动补齐数据"
     )
 
@@ -76,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     dl_parser.add_argument("--days", type=int, default=365, help="回溯下载天数")
     dl_parser.add_argument("--timeframe", default="1d", help="时间周期 (1d, 1h, etc.)")
     dl_parser.add_argument(
-        "--provider", default="auto", choices=["auto", "ib", "polygon"], help="数据源"
+        "--provider", default="auto", choices=["auto", "alpaca", "polygon", "ib"], help="数据源"
     )
 
     return parser

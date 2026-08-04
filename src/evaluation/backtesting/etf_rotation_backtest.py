@@ -47,7 +47,7 @@ from src.core.calendar import TradingCalendar
 from src.data.storage.backtest_store import BacktestStore
 from src.evaluation.backtesting import BacktestResult
 from src.evaluation.backtesting.config import TradeConfig
-from src.evaluation.backtesting.unified_engine import (
+from src.evaluation.backtesting.engine import (
     UnifiedBacktestEngine,
     UnifiedConfig,
     FeatureFlag,

@@ -5,7 +5,7 @@
 
 from .metrics.ic_analysis import ICAnalyzer
 from .metrics.performance import PerformanceAnalyzer
-from .backtesting.unified_engine import UnifiedBacktestEngine
+from .backtesting.engine import UnifiedBacktestEngine
 
 __all__ = [
     "ICAnalyzer",

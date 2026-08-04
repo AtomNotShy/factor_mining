@@ -352,7 +352,7 @@ class StrategyRegistry:
     @classmethod
     def register(cls, name: str, strategy_class: type):
         cls._strategies[name] = strategy_class
-        logger.info(f"注册策略: {name}")
+        logger.debug(f"注册策略: {name}")
         
     @classmethod
     def create(cls, name: str, params: Optional[Dict] = None) -> Optional[SimpleStrategy]:

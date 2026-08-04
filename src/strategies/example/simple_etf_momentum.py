@@ -113,22 +113,34 @@ class SimpleETFMomentumStrategy(VectorizedStrategy):
     def populate_entry_trend(
         self, dataframe: pd.DataFrame, metadata: Dict
     ) -> pd.DataFrame:
-        """
-        进场信号
-        得分大于 0 且有效的标的进入
-        """
-        dataframe["enter_long"] = np.where((dataframe["momentum_score"] > 0)
-            & (dataframe["momentum_score"] < self.max_score.value),1,0,)
+        """Entry: signal on state transition only (momentum 0 -> positive)."""
+        momentum = dataframe["momentum_score"]
+        prev_momentum = momentum.shift(1)
+
+        # State transition: cannot hold -> can hold
+        entry_condition = (
+            (momentum > 0) &
+            (prev_momentum <= 0) &
+            (momentum < self.max_score.value)
+        )
+
+        dataframe["enter_long"] = np.where(entry_condition, 1, 0)
         return dataframe
 
     def populate_exit_trend(
         self, dataframe: pd.DataFrame, metadata: Dict
     ) -> pd.DataFrame:
-        """
-        离场信号
-        得分变为负数或低于最小阈值时退出
-        """
-        dataframe["exit_long"] = np.where( dataframe["momentum_score"] <= self.min_score.value,1,0,)
+        """Exit: signal on state transition only (momentum positive -> <= min)."""
+        momentum = dataframe["momentum_score"]
+        prev_momentum = momentum.shift(1)
+
+        # State transition: can hold -> cannot hold
+        exit_condition = (
+            (momentum <= self.min_score.value) &
+            (prev_momentum > self.min_score.value)
+        )
+
+        dataframe["exit_long"] = np.where(exit_condition, 1, 0)
         return dataframe
 
     def generate_signals(
@@ -193,10 +205,7 @@ class SimpleETFMomentumStrategy(VectorizedStrategy):
         risk: RiskState,
         ctx: RunContext,
     ) -> List[OrderIntent]:
-        """
-        仓位计算
-        简化的等权配置
-        """
+        """Handle both FLAT and LONG signals correctly."""
         orders = []
 
         if not signals:
@@ -204,15 +213,36 @@ class SimpleETFMomentumStrategy(VectorizedStrategy):
 
         target_positions = self.target_positions.value
 
-        # 筛选有效的 LONG 信号
-        valid_signals = [
-            s for s in signals if s.action == ActionType.LONG and s.strength > 0
-        ]
+        # Separate signals by type
+        flat_signals = [s for s in signals if s.action == ActionType.FLAT]
+        long_signals = [s for s in signals if s.action == ActionType.LONG and s.strength > 0]
 
-        if not valid_signals:
-            # 没有有效信号，清空持仓
-            for symbol, qty in portfolio.positions.items():
-                if abs(qty) > 1e-6:
+        # Step 1: Process FLAT signals - close positions
+        for signal in flat_signals:
+            current_qty = portfolio.positions.get(signal.symbol, 0.0)
+            if abs(current_qty) > 1e-6:
+                orders.append(
+                    OrderIntent(
+                        ts_utc=ctx.now_utc,
+                        symbol=signal.symbol,
+                        side=OrderSide.SELL,
+                        qty=abs(current_qty),
+                        order_type=OrderType.MKT,
+                        strategy_id=self.strategy_id,
+                        metadata={"reason": "exit_signal"},
+                    )
+                )
+
+        # Step 2: Process LONG signals - select top N
+        if long_signals:
+            # Sort by strength descending
+            long_signals.sort(key=lambda x: x.strength, reverse=True)
+            top_signals = long_signals[:target_positions]
+            target_symbols = {s.symbol for s in top_signals}
+
+            # Step 3: Sell positions not in target
+            for symbol, qty in list(portfolio.positions.items()):
+                if abs(qty) > 1e-6 and symbol not in target_symbols:
                     orders.append(
                         OrderIntent(
                             ts_utc=ctx.now_utc,
@@ -221,67 +251,44 @@ class SimpleETFMomentumStrategy(VectorizedStrategy):
                             qty=abs(qty),
                             order_type=OrderType.MKT,
                             strategy_id=self.strategy_id,
-                            metadata={"reason": "no_valid_signal"},
+                            metadata={"reason": "rank_change"},
                         )
                     )
-            return orders
 
-        # 按得分排序
-        valid_signals.sort(key=lambda x: x.strength, reverse=True)
+            # Step 4: Buy new positions
+            held_symbols = set(portfolio.positions.keys())
+            slots = target_positions - len(held_symbols & target_symbols)
 
-        # 选出 Top N
-        top_signals = valid_signals[:target_positions]
-        target_symbols = {s.symbol for s in top_signals}
+            if slots > 0 and top_signals:
+                cash_per_position = portfolio.cash / slots
 
-        # 卖出不在目标中的持仓
-        for symbol, qty in portfolio.positions.items():
-            if abs(qty) > 1e-6 and symbol not in target_symbols:
-                orders.append(
-                    OrderIntent(
-                        ts_utc=ctx.now_utc,
-                        symbol=symbol,
-                        side=OrderSide.SELL,
-                        qty=abs(qty),
-                        order_type=OrderType.MKT,
-                        strategy_id=self.strategy_id,
-                        metadata={"reason": "rank_change"},
+                for signal in top_signals:
+                    if signal.symbol in held_symbols:
+                        continue
+
+                    price = signal.metadata.get("price", 0)
+                    if price <= 0:
+                        continue
+
+                    qty = cash_per_position / price
+
+                    if qty * price < 100:  # Minimum trade value
+                        continue
+
+                    orders.append(
+                        OrderIntent(
+                            ts_utc=ctx.now_utc,
+                            symbol=signal.symbol,
+                            side=OrderSide.BUY,
+                            qty=qty,
+                            order_type=OrderType.MKT,
+                            strategy_id=self.strategy_id,
+                            metadata={
+                                "reason": "new_position",
+                                "score": signal.strength,
+                            },
+                        )
                     )
-                )
-
-        # 买入目标标的
-        held_symbols = set(portfolio.positions.keys())
-        slots = target_positions - len(held_symbols & target_symbols)
-
-        if slots > 0 and top_signals:
-            cash_per_position = portfolio.cash / slots
-
-            for signal in top_signals:
-                if signal.symbol in held_symbols:
-                    continue
-
-                price = signal.metadata.get("price", 0)
-                if price <= 0:
-                    continue
-
-                qty = cash_per_position / price
-
-                if qty * price < 100:  # 最小交易金额
-                    continue
-
-                orders.append(
-                    OrderIntent(
-                        ts_utc=ctx.now_utc,
-                        symbol=signal.symbol,
-                        side=OrderSide.BUY,
-                        qty=qty,
-                        order_type=OrderType.MKT,
-                        strategy_id=self.strategy_id,
-                        metadata={
-                            "reason": "rank_change",
-                            "score": signal.strength,
-                        },
-                    )
-                )
 
         return orders
 

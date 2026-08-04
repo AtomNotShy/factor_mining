@@ -109,6 +109,27 @@ class PolygonSettings(BaseSettings):
         env_prefix = "POLYGON_"
 
 
+class AlpacaSettings(BaseSettings):
+    """Alpaca API配置（美股/ETF等）"""
+    api_key: str = ""
+    secret_key: str = ""
+    base_url: str = Field(default="https://data.alpaca.markets", description="Alpaca Data API Base URL")
+    feed: str = Field(default="iex", description="数据源：iex/sip")
+
+    class Config:
+        env_prefix = "ALPACA_"
+        case_sensitive = True  # 区分大小写
+
+    @model_validator(mode="after")
+    def _validate_and_fallback(self):
+        # 如果 API key 是占位符值，从 PAPER 变量读取
+        if self.api_key in (None, "", "your_api_key_id"):
+            self.api_key = os.getenv("ALPACA_PAPER_API_KEY", "") or ""
+        if self.secret_key in (None, "", "your_secret_key"):
+            self.secret_key = os.getenv("ALPACA_PAPER_SECRET_KEY", "") or ""
+        return self
+
+
 class IBSettings(BaseSettings):
     """Interactive Brokers API配置"""
     host: str = Field(default="127.0.0.1", description="TWS/IB Gateway 主机地址")
@@ -198,6 +219,7 @@ class Settings(BaseSettings):
     storage: StorageSettings = StorageSettings()
     exchange: ExchangeSettings = ExchangeSettings()
     polygon: PolygonSettings = PolygonSettings()
+    alpaca: AlpacaSettings = AlpacaSettings()
     ib: IBSettings = IBSettings()
     data: DataSettings = DataSettings()
     factor: FactorSettings = FactorSettings()
@@ -268,6 +290,17 @@ class Settings(BaseSettings):
         set_nested("polygon", "api_key", "polygon_api_key")
         set_nested("polygon", "base_url", "polygon_base_url")
         set_nested("polygon", "adjusted", "polygon_adjusted")
+
+        # Alpaca (ALPACA_*)
+        set_nested("alpaca", "api_key", "alpaca_api_key")
+        set_nested("alpaca", "secret_key", "alpaca_secret_key")
+        set_nested("alpaca", "base_url", "alpaca_base_url")
+        set_nested("alpaca", "feed", "alpaca_feed")
+        # 兼容旧名称
+        if "alpaca" not in values or not values.get("alpaca", {}).get("api_key"):
+            set_nested("alpaca", "api_key", "alpaca_paper_api_key")
+        if "alpaca" not in values or not values.get("alpaca", {}).get("secret_key"):
+            set_nested("alpaca", "secret_key", "alpaca_paper_secret_key")
 
         # Interactive Brokers (IB_*)
         set_nested("ib", "host", "ib_host")

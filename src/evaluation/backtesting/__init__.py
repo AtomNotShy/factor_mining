@@ -14,7 +14,7 @@ Usage:
     )
 """
 
-from .unified_engine import UnifiedBacktestEngine
+from .engine import UnifiedBacktestEngine
 
 from .config import (
     UnifiedConfig,

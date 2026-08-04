@@ -115,7 +115,12 @@ class PolygonCollector(BaseDataCollector):
 
                 merged = self.store.merge_time_series(cached, fetched_df, prefer_new=True)
                 merged = self._normalize_ohlcv_df(merged)
-                self.store.write(cache_key, merged)
+
+                # 直接写入统一的 bars 目录
+                unified_path = f"bars/{symbol.upper()}/{timeframe}/data.parquet"
+                self.store.write(unified_path, merged)
+                self.logger.debug(f"Polygon: 数据已保存到 {unified_path}")
+
                 cached = merged
 
             out = self.store.clip(cached, start_ts, end_ts)

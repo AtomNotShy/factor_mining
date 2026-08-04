@@ -186,7 +186,7 @@ factor_mining/
 │   │   └── adapter/              # 数据适配器
 │   ├── evaluation/               # 评估层
 │   │   ├── backtesting/          # 回测引擎
-│   │   │   ├── unified_engine.py # 统一回测引擎
+│   │   │   ├── engine.py # 统一回测引擎
 │   │   │   ├── freqtrade_engine.py
 │   │   │   └── report.py         # 报告生成
 │   │   └── metrics/              # 性能指标
@@ -267,7 +267,7 @@ class MyRSIStrategy(RSIStrategy):
 ```python
 import asyncio
 from datetime import date
-from src.evaluation.backtesting.unified_engine import UnifiedBacktestEngine, UnifiedConfig, TradeConfig
+from src.evaluation.backtesting.engine import UnifiedBacktestEngine, UnifiedConfig, TradeConfig
 from src.strategies.user_strategies import USETFMomentumStrategy
 
 async def run_backtest():
